@@ -13,7 +13,7 @@ const convertToArray = (objectData, commands) => {
   return objectData.map(item => [
     item.ip || '',
     item.user || 'root',
-    item.password || 'huawei@1234',
+    item.password || 'test@1234',
     item.port || 22,
     ...commands.map(cmd => item[cmd] || '')
   ]);
@@ -25,7 +25,7 @@ const convertToObject = (arrayData, headers) => {
     const obj = {
       ip: row[0] || '',
       user: row[1] || 'root',
-      password: row[2] || 'huawei@1234',
+      password: row[2] || 'test@1234',
       port: parseInt(row[3]) || 22
     };
     
@@ -40,7 +40,7 @@ const convertToObject = (arrayData, headers) => {
 
 // 定义初始数据
 const initialData = [
-  { ip: '', user: 'root', password: 'huawei@1234', port: 22 }
+  { ip: '', user: 'root', password: 'test@1234', port: 22 }
 ];
 
 // 初始命令列
@@ -439,7 +439,7 @@ export default function App() {
       return {
         ip: row[0] || '',
         user: row[1] || 'root',
-        password: row[2] || 'huawei@1234',
+        password: row[2] || 'test@1234',
         port: parseInt(row[3]) || 22,
         commands: currentCommands,
         rowId: `row-${idx}`
