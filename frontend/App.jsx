@@ -13,7 +13,7 @@ const convertToArray = (objectData, commands) => {
   return objectData.map(item => [
     item.ip || '',
     item.user || 'root',
-    item.password || 'test@1234',
+    item.password || 'huawei@1234',
     item.port || 22,
     ...commands.map(cmd => item[cmd] || '')
   ]);
@@ -25,7 +25,7 @@ const convertToObject = (arrayData, headers) => {
     const obj = {
       ip: row[0] || '',
       user: row[1] || 'root',
-      password: row[2] || 'test@1234',
+      password: row[2] || 'huawei@1234',
       port: parseInt(row[3]) || 22
     };
     
@@ -40,7 +40,7 @@ const convertToObject = (arrayData, headers) => {
 
 // 定义初始数据
 const initialData = [
-  { ip: '', user: 'root', password: 'test@1234', port: 22 }
+  { ip: '', user: 'root', password: 'huawei@1234', port: 22 }
 ];
 
 // 初始命令列
@@ -52,8 +52,16 @@ export default function App() {
   const [commands, setCommands] = useState(initialCommands);
   const [isRunning, setIsRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessages, setErrorMessages] = useState([]);
   const isDebugMode = process.env.NODE_ENV === 'development';
+  
+  // 跳板机相关状态
+  const [useJumpServer, setUseJumpServer] = useState(false);
+  const [jumpServerConfig, setJumpServerConfig] = useState({
+    ip: '',
+    user: 'root',
+    port: 22
+  });
   
   // 配置持久化相关状态
   const [configName, setConfigName] = useState("");
@@ -227,7 +235,11 @@ export default function App() {
           name: configName,
           data: {
             commands: currentCommands,
-            servers: currentObjectData
+            servers: currentObjectData,
+            jumpServer: {
+              enabled: useJumpServer,
+              config: jumpServerConfig
+            }
           }
         })
       });
@@ -298,6 +310,18 @@ export default function App() {
             setObjectData(result.data.servers);
           }
           
+          // 加载跳板机配置
+          if (result.data.jumpServer) {
+            setUseJumpServer(result.data.jumpServer.enabled || false);
+            if (result.data.jumpServer.config) {
+              setJumpServerConfig({
+                ip: result.data.jumpServer.config.ip || '',
+                user: result.data.jumpServer.config.user || 'root',
+                port: result.data.jumpServer.config.port || 22
+              });
+            }
+          }
+          
           alert(`Configuration "${result.name}" loaded successfully`);
         } else {
           alert(`Error: ${result.error || 'Invalid configuration data'}`);
@@ -364,7 +388,11 @@ export default function App() {
     
     const configData = {
       commands: currentCommands,
-      servers: currentObjectData
+      servers: currentObjectData,
+      jumpServer: {
+        enabled: useJumpServer,
+        config: jumpServerConfig
+      }
     };
     
     const blob = new Blob([JSON.stringify(configData, null, 2)], { type: 'application/json' });
@@ -403,6 +431,18 @@ export default function App() {
             setObjectData(config.servers);
           }
           
+          // 导入跳板机配置
+          if (config.jumpServer) {
+            setUseJumpServer(config.jumpServer.enabled || false);
+            if (config.jumpServer.config) {
+              setJumpServerConfig({
+                ip: config.jumpServer.config.ip || '',
+                user: config.jumpServer.config.user || 'root',
+                port: config.jumpServer.config.port || 22
+              });
+            }
+          }
+          
           alert('Configuration imported successfully');
         } else {
           alert('Invalid configuration file');
@@ -425,10 +465,32 @@ export default function App() {
       return;
     }
     
+    // 跳板机配置验证
+    if (useJumpServer) {
+      if (!jumpServerConfig.ip.trim()) {
+        alert('Please configure jump server IP address when jump server is enabled');
+        return;
+      }
+      if (!jumpServerConfig.user.trim()) {
+        alert('Please configure jump server username when jump server is enabled');
+        return;
+      }
+    }
+    
     setIsRunning(true);
-    setConnectionStatus('connecting');
-    setErrorMessage('');
+    if (hotRef.current && hotRef.current.hotInstance) {
+      const hotInstance = hotRef.current.hotInstance;
+      const rowCount = hotInstance.countRows();
+      const colCount = hotInstance.countCols();
 
+      for (let row = 0; row < rowCount; row++) {
+        for (let col = 4; col < colCount; col++) {
+          hotInstance.setDataAtCell(row, col, '');
+        }
+      }
+    }
+    setConnectionStatus('connecting');
+    setErrorMessages([]);
     const hotInstance = hotRef.current.hotInstance;
     const currentArrayData = hotInstance.getData();
     const currentColumns = hotInstance.getColHeader();
@@ -436,14 +498,26 @@ export default function App() {
       
     // 将表格数据转换为后端所需的格式
     const rows = currentArrayData.map((row, idx) => {
-      return {
+      const baseData = {
         ip: row[0] || '',
         user: row[1] || 'root',
-        password: row[2] || 'test@1234',
+        password: row[2] || 'huawei@1234',
         port: parseInt(row[3]) || 22,
         commands: currentCommands,
         rowId: `row-${idx}`
       };
+      
+      // 如果启用跳板机，添加跳板机配置
+      if (useJumpServer) {
+        baseData.jumpServer = {
+          enabled: true,
+          ip: jumpServerConfig.ip,
+          user: jumpServerConfig.user,
+          port: jumpServerConfig.port
+        };
+      }
+      
+      return baseData;
     });
 
     try {
@@ -458,8 +532,8 @@ export default function App() {
         console.log("WebSocket room:", room);
         
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsHost = window.location.hostname; // 自动获取当前主机名
-        const wsPort = '8000'; // 或者从环境变量获取
+        const wsHost = window.location.hostname;
+        const wsPort = '8000';
         const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}/ws/${room}`;
         const ws = new WebSocket(wsUrl);
 
@@ -481,7 +555,7 @@ export default function App() {
           
           // 处理错误消息
           if (message.error) {
-            setErrorMessage(message.error);
+            setErrorMessages(prevErrors => [...prevErrors, message.error]);
             return;
           }
           
@@ -577,7 +651,7 @@ export default function App() {
         ws.onerror = (error) => {
           console.error('WebSocket error:', error);
           setConnectionStatus('error');
-          setErrorMessage('WebSocket connection error');
+          setErrorMessages(prevErrors => [...prevErrors, 'WebSocket connection error']);
         };
 
         ws.onclose = () => {
@@ -589,13 +663,13 @@ export default function App() {
       } else {
         console.error('Failed to send commands to the backend:', await res.text());
         setConnectionStatus('error');
-        setErrorMessage('Failed to send commands to the backend');
+        setErrorMessages(prevErrors => [...prevErrors, 'Failed to send commands to the backend']);
         setIsRunning(false);
       }
     } catch (error) {
       console.error('Error executing commands:', error);
       setConnectionStatus('error');
-      setErrorMessage(`Error: ${error.message}`);
+      setErrorMessages(prevErrors => [...prevErrors, `Error: ${error.message}`]);
       setIsRunning(false);
     }
   };
@@ -1047,13 +1121,126 @@ export default function App() {
   return (
     <div className="container">
       <div className="header">
-        <h1 className="title">CyclopsCmd</h1>
-        <p className="description">
-          Execute and monitor commands across multiple servers. 
-          Double-click on command headers to edit them.
-          Right-click on the table for more operations.
-        </p>
-        <p>跨多个服务器执行和监控命令。双击命令标题以对其进行编辑。右键单击表可执行更多作。</p>
+        {/* Logo */}
+        <div className="background-logo">
+          <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              {/* 主渐变 */}
+              <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style={{stopColor:"#1e293b", stopOpacity:1}} />
+                <stop offset="100%" style={{stopColor:"#0f172a", stopOpacity:1}} />
+              </linearGradient>
+              
+              {/* 终端屏幕渐变 */}
+              <linearGradient id="screenGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style={{stopColor:"#000000", stopOpacity:0.9}} />
+                <stop offset="100%" style={{stopColor:"#1a1a1a", stopOpacity:0.9}} />
+              </linearGradient>
+              
+              {/* 阴影滤镜 */}
+              <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                <feDropShadow dx="2" dy="4" stdDeviation="3" floodOpacity="0.3"/>
+              </filter>
+            </defs>
+
+            {/* 终端屏幕框架 */}
+            <rect x="40" y="60" width="120" height="80" rx="6" ry="6" fill="url(#screenGradient)" stroke="rgba(255,255,255,0.2)" strokeWidth="1"/>
+            
+            {/* 屏幕内容 - 命令行提示符和代码 */}
+            <g fontFamily="monospace" fontSize="7" fill="#00ff41">
+              {/* 命令提示符 */}
+              <text x="45" y="78">[root@localhost ~]# </text>
+              <rect x="122" y="72" width="4" height="8" fill="#00ff41" opacity="0.7">
+                <animate attributeName="opacity" values="0.7;0;0.7" dur="1s" repeatCount="indefinite"/>
+              </rect>
+              
+              {/* 代码行 */}
+              <text x="45" y="95" opacity="0.8">You are not expected</text>
+              <text x="45" y="108" opacity="0.8">to understand this.</text>
+              <text x="45" y="125" opacity="0.6">Designed by Kenny</text>
+            </g>
+          </svg>
+        </div>
+
+        {/* 文字内容 */}
+        <div className="header-content">
+          <h1 className="title">CyclopsCmd</h1>
+          <p className="description">
+            Execute and monitor commands across multiple servers. 
+            Double-click on command headers to edit them.
+            Right-click on the table for more operations.
+          </p>
+          <p className="description">
+            跨多个服务器执行和监控命令。双击命令标题以对其进行编辑。右键单击表可执行更多操作。
+          </p>
+        </div>
+      </div>
+      
+      {/* 跳板机配置区域 */}
+      <div className="jump-server-section">
+        <div className="jump-server-toggle">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={useJumpServer}
+              onChange={(e) => setUseJumpServer(e.target.checked)}
+              disabled={isRunning}
+            />
+            <span className="slider round"></span>
+          </label>
+          <span className="jump-server-label">Use Jump Server / 使用跳板机</span>
+        </div>
+        
+        {useJumpServer && (
+          <div className="jump-server-config">
+            <div className="jump-server-notice">
+              <div className="notice-icon">⚠️</div>
+              <div className="notice-text">
+                <strong>Important:</strong> Please ensure passwordless SSH key authentication is configured for the jump server.
+                <br />
+                <strong>重要提示：</strong> 请确保已为跳板机配置免密SSH密钥认证。
+              </div>
+            </div>
+            
+            <div className="jump-server-inputs">
+              <div className="input-group">
+                <label>Jump Server IP / 跳板机IP:</label>
+                <input
+                  type="text"
+                  value={jumpServerConfig.ip}
+                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, ip: e.target.value})}
+                  placeholder="Enter jump server IP address"
+                  disabled={isRunning}
+                  required
+                />
+              </div>
+              
+              <div className="input-group">
+                <label>Username / 用户名:</label>
+                <input
+                  type="text"
+                  value={jumpServerConfig.user}
+                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, user: e.target.value})}
+                  placeholder="root"
+                  disabled={isRunning}
+                />
+              </div>
+              
+              <div className="input-group">
+                <label>Port / 端口:</label>
+                <input
+                  type="number"
+                  value={jumpServerConfig.port}
+                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, port: parseInt(e.target.value) || 22})}
+                  placeholder="22"
+                  disabled={isRunning}
+                  min="1"
+                  max="65535"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       
       <div className="button-group">
@@ -1140,21 +1327,40 @@ export default function App() {
           )}
         </div>
         
-        {connectionStatus && (
-          <div className={`status-indicator status-${connectionStatus}`}>
-            <span className="status-dot"></span>
-            {connectionStatus === 'connecting' && 'Connecting...'}
-            {connectionStatus === 'connected' && 'Connected'}
-            {connectionStatus === 'error' && 'Connection Error'}
-          </div>
-        )}
-      </div>
-      
-      {errorMessage && (
-        <div className="error-message">
-          {errorMessage}
+        <div className="status-and-errors">
+          {connectionStatus && (
+            <div className={`status-indicator status-${connectionStatus}`}>
+              <span className="status-dot"></span>
+              {connectionStatus === 'connecting' && 'Connecting...'}
+              {connectionStatus === 'connected' && 'Connected'}
+              {connectionStatus === 'error' && 'Connection Error'}
+            </div>
+          )}
+          
+          {errorMessages.length > 0 && (
+            <div className="error-messages-container">
+              <div className="error-messages-header">
+                <span>错误消息 ({errorMessages.length})</span>
+                <button 
+                  className="clear-errors-btn" 
+                  onClick={() => setErrorMessages([])}
+                  title="清除所有错误消息"
+                >
+                  清除
+                </button>
+              </div>
+              <div className="error-messages-list">
+                {errorMessages.map((msg, index) => (
+                  <div key={index} className="error-message-item">
+                    {msg}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
+    
       
       <div className="table-container">
         <HotTable ref={hotRef} {...hotSettings} />
