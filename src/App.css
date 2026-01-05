@@ -243,6 +243,17 @@ input:disabled + .slider:before {
   animation: pulse 1.5s infinite;
 }
 
+.status-queued {
+  background-color: hsl(45 93.4% 97.5%);
+  color: hsl(45 93.4% 30%);
+  border: 1px solid hsl(45 93.4% 87.5%);
+}
+
+.status-queued .status-dot {
+  background-color: hsl(45 93.4% 47.5%);
+  animation: pulse 1.5s infinite;
+}
+
 .status-connected {
   background-color: hsl(142.1 70.6% 97.3%);
   color: hsl(142.1 70.6% 25.3%);
@@ -253,6 +264,27 @@ input:disabled + .slider:before {
   background-color: hsl(142.1 70.6% 45.3%);
 }
 
+.status-running {
+  background-color: hsl(142.1 70.6% 97.3%);
+  color: hsl(142.1 70.6% 25.3%);
+  border: 1px solid hsl(142.1 70.6% 85.3%);
+}
+
+.status-running .status-dot {
+  background-color: hsl(142.1 70.6% 45.3%);
+  animation: pulse 1.5s infinite;
+}
+
+.status-completed {
+  background-color: hsl(142.1 70.6% 97.3%);
+  color: hsl(142.1 70.6% 25.3%);
+  border: 1px solid hsl(142.1 70.6% 85.3%);
+}
+
+.status-completed .status-dot {
+  background-color: hsl(142.1 70.6% 45.3%);
+}
+
 .status-error {
   background-color: hsl(0 85.7% 97.3%);
   color: hsl(0 72.2% 30.6%);
@@ -260,6 +292,26 @@ input:disabled + .slider:before {
 }
 
 .status-error .status-dot {
+  background-color: hsl(0 72.2% 50.6%);
+}
+
+.status-failed {
+  background-color: hsl(0 85.7% 97.3%);
+  color: hsl(0 72.2% 30.6%);
+  border: 1px solid hsl(0 85.7% 87.3%);
+}
+
+.status-failed .status-dot {
+  background-color: hsl(0 72.2% 50.6%);
+}
+
+.status-canceled {
+  background-color: hsl(0 85.7% 97.3%);
+  color: hsl(0 72.2% 30.6%);
+  border: 1px solid hsl(0 85.7% 87.3%);
+}
+
+.status-canceled .status-dot {
   background-color: hsl(0 72.2% 50.6%);
 }
 
@@ -578,11 +630,31 @@ input:disabled + .slider:before {
   background-color: hsl(45 93.4% 47.5%);
 }
 
+.status-queued .status-dot {
+  background-color: hsl(45 93.4% 47.5%);
+}
+
 .status-connected .status-dot {
   background-color: hsl(142.1 70.6% 45.3%);
 }
 
+.status-running .status-dot {
+  background-color: hsl(142.1 70.6% 45.3%);
+}
+
+.status-completed .status-dot {
+  background-color: hsl(142.1 70.6% 45.3%);
+}
+
 .status-error .status-dot {
+  background-color: hsl(0 72.2% 50.6%);
+}
+
+.status-failed .status-dot {
+  background-color: hsl(0 72.2% 50.6%);
+}
+
+.status-canceled .status-dot {
   background-color: hsl(0 72.2% 50.6%);
 }
 

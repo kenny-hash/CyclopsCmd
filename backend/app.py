@@ -5,7 +5,7 @@ import json
 import datetime
 import time
 import traceback
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Query, WebSocketDisconnect
 from typing import List, Dict, Any, Optional
 import asyncssh
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ Base = declarative_base()
 class ServerCommandResult(Base):
     __tablename__ = 'server_command_results'
     id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String, index=True, nullable=True)
     ip = Column(String, index=True)
     user = Column(String, default='root')
     password = Column(String, default='huawei@1234')
@@ -41,6 +42,20 @@ class ServerConfig(Base):
     config_data = Column(Text)  # 存储JSON格式的配置数据
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class CommandJob(Base):
+    __tablename__ = 'command_jobs'
+    job_id = Column(String, primary_key=True, index=True)
+    status = Column(String, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+    room = Column(String, nullable=True)
+    request_id = Column(String, nullable=True)
+    server_count = Column(Integer, nullable=True)
+    command_count = Column(Integer, nullable=True)
 
 # 创建数据库引擎和会话
 engine = create_engine(DATABASE_URL)
@@ -427,6 +442,14 @@ async def cleanup_connections():
 # WebSocket连接注册表
 websockets = {}
 active_rooms = {}  # 存储房间信息，包括请求ID
+job_queue: asyncio.Queue = asyncio.Queue()
+job_payloads = {}
+job_progress = {}
+job_messages = {}
+job_message_counters = {}
+job_rooms = {}
+job_cancel_events = {}
+job_message_lock = asyncio.Lock()
 
 # 数据模型定义
 class JumpServerConfig(BaseModel):
@@ -455,6 +478,91 @@ def get_db():
     finally:
         db.close()
 
+
+def update_job_status(job_id: str, status: str, error: Optional[str] = None,
+                      started_at: Optional[datetime.datetime] = None,
+                      finished_at: Optional[datetime.datetime] = None):
+    db = SessionLocal()
+    try:
+        job = db.query(CommandJob).filter(CommandJob.job_id == job_id).first()
+        if job:
+            job.status = status
+            if error is not None:
+                job.error = error
+            if started_at is not None:
+                job.started_at = started_at
+            if finished_at is not None:
+                job.finished_at = finished_at
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Error updating job status: {exc}", exc_info=True, extra={"job_id": job_id})
+    finally:
+        db.close()
+
+
+async def send_job_message(job_id: str, payload: Dict[str, Any]):
+    async with job_message_lock:
+        sequence = job_message_counters.get(job_id, 0)
+        job_message_counters[job_id] = sequence + 1
+        message = {"sequence": sequence, **payload}
+        job_messages.setdefault(job_id, []).append(message)
+
+    room = job_rooms.get(job_id)
+    if room and room in websockets:
+        try:
+            await websockets[room].send_json(message)
+        except Exception as exc:
+            logger.warning(f"Failed to send WebSocket message: {exc}", extra={"job_id": job_id, "room": room})
+
+
+async def increment_job_progress(job_id: str):
+    progress = job_progress.get(job_id)
+    if not progress:
+        return
+    progress["completed_commands"] += 1
+
+
+async def run_job(job_id: str):
+    payload = job_payloads.get(job_id)
+    if not payload:
+        return
+    cancel_event = job_cancel_events.get(job_id)
+    if cancel_event and cancel_event.is_set():
+        update_job_status(job_id, "canceled", finished_at=datetime.datetime.utcnow())
+        return
+
+    request_id = payload["request_id"]
+    rows = payload["rows"]
+    update_job_status(job_id, "running", started_at=datetime.datetime.utcnow())
+
+    semaphore = asyncio.Semaphore(20)
+
+    async def exec_row_with_limit(row):
+        async with semaphore:
+            await exec_row(row, send_job_message, request_id, job_id, cancel_event)
+
+    await asyncio.gather(*(exec_row_with_limit(row) for row in rows))
+
+    if cancel_event and cancel_event.is_set():
+        update_job_status(job_id, "canceled", finished_at=datetime.datetime.utcnow())
+    else:
+        update_job_status(job_id, "completed", finished_at=datetime.datetime.utcnow())
+        await send_job_message(job_id, {"status": "completed"})
+
+
+async def job_worker():
+    while True:
+        job_id = await job_queue.get()
+        try:
+            await run_job(job_id)
+        except Exception as exc:
+            logger.error(f"Job execution failed: {exc}", exc_info=True, extra={"job_id": job_id})
+            update_job_status(job_id, "failed", error=str(exc), finished_at=datetime.datetime.utcnow())
+            await send_job_message(job_id, {"status": "failed", "error": str(exc)})
+        finally:
+            job_queue.task_done()
+
 # 批量保存结果到数据库
 async def save_results_batch(results, db=None):
     """批量保存命令执行结果到数据库"""
@@ -477,7 +585,7 @@ async def save_results_batch(results, db=None):
         if close_db:
             db.close()
 
-async def exec_row(row: Row, ws: WebSocket, request_id: str):
+async def exec_row(row: Row, send_message, request_id: str, job_id: str, cancel_event: Optional[asyncio.Event]):
     """执行单个服务器上的所有命令，支持跳板机连接"""
     results_batch = []
     conn = None
@@ -485,6 +593,9 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
     max_retries = 3  # 最大重试次数
     
     try:
+        if cancel_event and cancel_event.is_set():
+            return
+
         # 检查是否需要使用跳板机
         use_jump_server = (
             row.jumpServer and 
@@ -548,7 +659,7 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                         error_msg = f"Jump server connection failed after {max_retries} attempts: {last_error}"
                     
                     logger.error(error_msg, extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
-                    await ws.send_json({
+                    await send_message({
                         "rowId": row.rowId,
                         "error": error_msg,
                     })
@@ -565,6 +676,9 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
         async def execute_command(cmd):
             nonlocal conn, jump_conn  # 引用外部连接变量，以便可以重置
             async with cmd_semaphore:
+                if cancel_event and cancel_event.is_set():
+                    return
+
                 start_time = time.time()
                 retry_count = 0
                 
@@ -611,12 +725,13 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             # 否则直接使用值，可能是None或整数
                             json_exit_status = exit_status
 
-                        await ws.send_json({
+                        await send_message({
                             "rowId": row.rowId,
                             "command": cmd,
                             "output": output,
                             "exitStatus": json_exit_status,
                         })
+                        await increment_job_progress(job_id)
                         
                         logger.info(f"Command executed in {execution_time:.2f}s", 
                                     extra={
@@ -629,6 +744,7 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                         
                         # 准备数据库记录
                         result = ServerCommandResult(
+                            job_id=job_id,
                             ip=row.ip,
                             user=row.user,
                             password="*****",  # 不存储明文密码
@@ -707,12 +823,13 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             logger.error(f"Max retries reached for command execution due to connection issues", 
                                        extra={"request_id": request_id, "row_id": row.rowId, "command": cmd})
                             
-                            await ws.send_json({
-                                "rowId": row.rowId,
-                                "command": cmd,
-                                "error": f"SSH connection failed after {max_retries} attempts: {e}"
-                            })
-                            break
+                        await send_message({
+                            "rowId": row.rowId,
+                            "command": cmd,
+                            "error": f"SSH connection failed after {max_retries} attempts: {e}"
+                        })
+                        await increment_job_progress(job_id)
+                        break
                     
                     except asyncio.TimeoutError:
                         execution_time = time.time() - start_time
@@ -729,11 +846,12 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             logger.error(f"Command execution timed out after {execution_time:.2f}s and {max_retries} attempts", 
                                        extra={"request_id": request_id, "row_id": row.rowId, "command": cmd})
                             
-                            await ws.send_json({
+                            await send_message({
                                 "rowId": row.rowId,
                                 "command": cmd,
                                 "error": "Command execution timed out after multiple attempts"
                             })
+                            await increment_job_progress(job_id)
                             break
                     
                     except Exception as e:
@@ -754,17 +872,20 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             await asyncio.sleep(2 ** retry_count)
                         else:
                             # 重试次数用尽
-                            await ws.send_json({
+                            await send_message({
                                 "rowId": row.rowId,
                                 "command": cmd,
                                 "error": f"{type(e).__name__}: {str(e)}"
                             })
+                            await increment_job_progress(job_id)
                             break
         
         # 使用有限的并发度执行命令，防止过载
         # 这里我们将并发命令数从无限制改为最多20个
         tasks = []
         for cmd in row.commands:
+            if cancel_event and cancel_event.is_set():
+                break
             tasks.append(execute_command(cmd))
             
             # 每20个命令一批，避免创建过多任务
@@ -785,7 +906,7 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                    exc_info=True,
                    extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
         
-        await ws.send_json({
+        await send_message({
             "rowId": row.rowId,
             "error": f"{type(exc).__name__}: {exc}",
         })
@@ -797,6 +918,7 @@ from sqlalchemy import inspect
 async def startup_event():
     # 启动连接清理任务
     asyncio.create_task(cleanup_connections())
+    asyncio.create_task(job_worker())
     logger.info("Application started, connection cleanup task running")
     
     # 检查并更新数据库结构
@@ -812,51 +934,154 @@ async def startup_event():
                 # 使用 text() 函数将 SQL 字符串转化为可执行对象
                 conn.execute(text('ALTER TABLE server_command_results ADD COLUMN exit_status INTEGER'))
                 logger.info("'exit_status' column added successfully.")
+
+        # 检查是否缺少 job_id 列
+        if 'job_id' not in columns:
+            logger.info("Missing 'job_id' column, adding it.")
+            with engine.connect() as conn:
+                conn.execute(text('ALTER TABLE server_command_results ADD COLUMN job_id VARCHAR'))
+                logger.info("'job_id' column added successfully.")
     except Exception as e:
         logger.error(f"Error checking or adding columns: {e}", exc_info=True)
 
 # API端点：执行命令
 @app.post("/api/v1/execute")
 async def execute(rows: List[Row]):
-    """创建房间ID；前端应立即打开WebSocket。"""
-    # 生成唯一请求ID和房间ID
+    """创建任务并入队执行。"""
     request_id = f"req-{uuid.uuid4().hex[:8]}"
+    job_id = uuid.uuid4().hex
     room = uuid.uuid4().hex
-    
-    # 验证请求数据
+
     if not rows:
         logger.warning(f"Empty request received", extra={"request_id": request_id})
         raise HTTPException(status_code=400, detail="No server data provided")
-    
-    # 验证跳板机配置
+
     for row in rows:
         if row.jumpServer and row.jumpServer.enabled:
             if not row.jumpServer.ip or not row.jumpServer.ip.strip():
                 raise HTTPException(status_code=400, detail="Jump server IP is required when jump server is enabled")
             if not row.jumpServer.user or not row.jumpServer.user.strip():
                 raise HTTPException(status_code=400, detail="Jump server username is required when jump server is enabled")
-    
-    # 存储房间信息
+
+    server_count = len(rows)
+    command_count = sum(len(row.commands) for row in rows)
+
+    db = SessionLocal()
+    try:
+        job = CommandJob(
+            job_id=job_id,
+            status="queued",
+            created_at=datetime.datetime.utcnow(),
+            room=room,
+            request_id=request_id,
+            server_count=server_count,
+            command_count=command_count
+        )
+        db.add(job)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Error creating job: {exc}", exc_info=True, extra={"job_id": job_id})
+        raise HTTPException(status_code=500, detail="Failed to create job")
+    finally:
+        db.close()
+
     active_rooms[room] = {
-        "rows": rows,
+        "job_id": job_id,
         "request_id": request_id,
-        "created_at": datetime.datetime.utcnow().isoformat(),
-        "server_count": len(rows),
-        "command_count": sum(len(row.commands) for row in rows)
+        "created_at": datetime.datetime.utcnow().isoformat()
     }
-    
-    # 设置自动清理任务
-    asyncio.create_task(cleanup_room(room, 3600))  # 1小时后清理房间数据
-    
-    logger.info(f"Execution request received", 
-               extra={
-                   "request_id": request_id,
-                   "room": room,
-                   "server_count": len(rows),
-                   "command_count": sum(len(row.commands) for row in rows)
-               })
-    
-    return {"room": room, "request_id": request_id}
+    asyncio.create_task(cleanup_room(room, 3600))
+
+    job_payloads[job_id] = {
+        "rows": rows,
+        "request_id": request_id
+    }
+    job_progress[job_id] = {
+        "total_commands": command_count,
+        "completed_commands": 0
+    }
+    job_messages[job_id] = []
+    job_message_counters[job_id] = 0
+    job_rooms[job_id] = room
+    job_cancel_events[job_id] = asyncio.Event()
+
+    await job_queue.put(job_id)
+
+    logger.info(
+        "Execution job enqueued",
+        extra={
+            "request_id": request_id,
+            "job_id": job_id,
+            "room": room,
+            "server_count": server_count,
+            "command_count": command_count
+        }
+    )
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/v1/jobs/{job_id}")
+async def get_job(job_id: str, since: int = Query(0, ge=0)):
+    db = SessionLocal()
+    try:
+        job = db.query(CommandJob).filter(CommandJob.job_id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+    finally:
+        db.close()
+
+    progress = job_progress.get(job_id, {"total_commands": 0, "completed_commands": 0})
+    messages = job_messages.get(job_id, [])
+    new_messages = [msg for msg in messages if msg.get("sequence", 0) >= since]
+    next_since = since
+    if new_messages:
+        next_since = new_messages[-1]["sequence"] + 1
+    else:
+        next_since = since
+
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "error": job.error,
+        "progress": progress,
+        "messages": new_messages,
+        "next_since": next_since
+    }
+
+
+@app.post("/api/v1/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    db = SessionLocal()
+    try:
+        job = db.query(CommandJob).filter(CommandJob.job_id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status in {"completed", "failed", "canceled"}:
+            return {"job_id": job_id, "status": job.status}
+
+        cancel_event = job_cancel_events.get(job_id)
+        if cancel_event:
+            cancel_event.set()
+
+        job.status = "canceled"
+        job.finished_at = datetime.datetime.utcnow()
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Error canceling job: {exc}", exc_info=True, extra={"job_id": job_id})
+        raise HTTPException(status_code=500, detail="Failed to cancel job")
+    finally:
+        db.close()
+
+    await send_job_message(job_id, {"status": "canceled"})
+    return {"job_id": job_id, "status": "canceled"}
 
 # 房间数据清理函数
 async def cleanup_room(room_id: str, delay: int):
@@ -874,9 +1099,9 @@ async def websocket_endpoint(ws: WebSocket, room: str):
     # 获取房间数据和请求ID
     room_data = active_rooms.get(room, {})
     request_id = room_data.get("request_id", f"unknown-{uuid.uuid4().hex[:8]}")
-    rows = room_data.get("rows", [])
+    job_id = room_data.get("job_id")
     
-    if not rows:
+    if not job_id:
         logger.error(f"No data found for room", extra={"request_id": request_id, "room": room})
         await ws.send_json({"error": "No data available for this room."})
         await ws.close()
@@ -893,27 +1118,14 @@ async def websocket_endpoint(ws: WebSocket, room: str):
     try:
         logger.info(f"WebSocket connection established", 
                   extra={"request_id": request_id, "room": room})
-
-        # 创建并发控制信号量
-        semaphore = asyncio.Semaphore(20)  # 最多20个并发SSH连接
-        
-        # 使用信号量限制并发
-        async def exec_row_with_limit(row):
-            async with semaphore:
-                await exec_row(row, ws, request_id)
-        
-        # 并发执行所有行的命令
-        await asyncio.gather(*(exec_row_with_limit(row) for row in rows))
-        
-        # 发送完成消息，通知前端所有命令已执行完毕
-        await ws.send_json({"status": "completed"})
-        logger.info(f"All commands completed", extra={"request_id": request_id, "room": room})
-        
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected", extra={"request_id": request_id, "room": room, "job_id": job_id})
     except Exception as e:
         logger.error(f"Error in WebSocket processing", 
                    exc_info=True,
-                   extra={"request_id": request_id, "room": room})
-        await ws.send_json({"error": str(e)})
+                   extra={"request_id": request_id, "room": room, "job_id": job_id})
     finally:
         # 清理 WebSocket 连接
         websockets.pop(room, None)

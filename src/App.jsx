@@ -53,7 +53,12 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null);
   const [errorMessages, setErrorMessages] = useState([]);
+  const [jobId, setJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
+  const [jobProgress, setJobProgress] = useState({ total: 0, completed: 0 });
+  const [jobSince, setJobSince] = useState(0);
   const isDebugMode = process.env.NODE_ENV === 'development';
+  const activeCommandsRef = useRef([]);
   
   // 跳板机相关状态
   const [useJumpServer, setUseJumpServer] = useState(false);
@@ -203,6 +208,88 @@ export default function App() {
       observer.disconnect();
     };
   }, [hotRef.current, commands]);
+
+  const applyJobMessage = (message, hotInstance) => {
+    if (message.status === "completed") {
+      setIsRunning(false);
+      setConnectionStatus(null);
+      return;
+    }
+
+    if (message.status === "canceled") {
+      setIsRunning(false);
+      setConnectionStatus(null);
+      return;
+    }
+
+    if (message.error) {
+      setErrorMessages(prevErrors => [...prevErrors, message.error]);
+      return;
+    }
+
+    if (!message.rowId) {
+      console.warn("Received message without rowId:", message);
+      return;
+    }
+
+    const rowIdParts = message.rowId.split('-');
+    const rowIndex = parseInt(rowIdParts[1]);
+
+    if (isNaN(rowIndex) || rowIndex < 0) {
+      console.error('Invalid row index from rowId:', message.rowId);
+      return;
+    }
+
+    const currentCommands = activeCommandsRef.current;
+
+    if (message.command && message.output) {
+      const commandIndex = currentCommands.indexOf(message.command);
+
+      if (commandIndex !== -1) {
+        const columnIndex = 4 + commandIndex;
+        const processedOutput = message.output;
+
+        if (!hotInstance.getCellMeta(rowIndex, columnIndex).renderer) {
+          hotInstance.setCellMeta(rowIndex, columnIndex, 'renderer', function(instance, td, row, col, prop, value) {
+            Handsontable.renderers.TextRenderer.apply(this, arguments);
+
+            if (value) {
+              td.innerHTML = ansiToHtml(value);
+              td.className += ' ansi-enabled-cell';
+            }
+          });
+        }
+
+        hotInstance.setDataAtCell(rowIndex, columnIndex, processedOutput);
+
+        const cellMeta = hotInstance.getCellMeta(rowIndex, columnIndex);
+        cellMeta.copyable = true;
+
+        hotInstance.render();
+      }
+    } else if (message.output) {
+      const lastColumnIndex = hotInstance.countCols() - 1;
+      const processedOutput = message.output;
+
+      if (!hotInstance.getCellMeta(rowIndex, lastColumnIndex).renderer) {
+        hotInstance.setCellMeta(rowIndex, lastColumnIndex, 'renderer', function(instance, td, row, col, prop, value) {
+          Handsontable.renderers.TextRenderer.apply(this, arguments);
+
+          if (value) {
+            td.innerHTML = ansiToHtml(value);
+            td.className += ' ansi-enabled-cell';
+          }
+        });
+      }
+
+      hotInstance.setDataAtCell(rowIndex, lastColumnIndex, processedOutput);
+
+      const cellMeta = hotInstance.getCellMeta(rowIndex, lastColumnIndex);
+      cellMeta.copyable = true;
+
+      hotInstance.render();
+    }
+  };
 
   // 保存当前配置
   const saveConfig = async () => {
@@ -528,138 +615,16 @@ export default function App() {
       });
 
       if (res.ok) {
-        const { room } = await res.json();
-        console.log("WebSocket room:", room);
-        
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsHost = window.location.hostname;
-        const wsPort = '8000';
-        const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}/ws/${room}`;
-        const ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          console.log('WebSocket connection established');
-          setConnectionStatus('connected');
-        };
-
-        ws.onmessage = (event) => {
-          const message = JSON.parse(event.data);
-          
-          // 处理完成状态消息
-          if (message.status === "completed") {
-            console.log("All commands completed successfully");
-            setIsRunning(false);
-            setConnectionStatus(null);
-            return;
-          }
-          
-          // 处理错误消息
-          if (message.error) {
-            setErrorMessages(prevErrors => [...prevErrors, message.error]);
-            return;
-          }
-          
-          // 确保消息包含rowId字段
-          if (!message.rowId) {
-            console.warn("Received message without rowId:", message);
-            return;
-          }
-          
-          // 解析行ID以获取行索引
-          const rowIdParts = message.rowId.split('-');
-          const rowIndex = parseInt(rowIdParts[1]);
-          
-          if (isNaN(rowIndex) || rowIndex < 0) {
-            console.error('Invalid row index from rowId:', message.rowId);
-            return;
-          }
-          
-          // 更新对应命令的输出
-          if (message.command && message.output) {
-            // 找到对应的命令列
-            const commandIndex = currentCommands.indexOf(message.command);
-            
-            if (commandIndex !== -1) {
-              const columnIndex = 4 + commandIndex; // IP, User, Password, Port 占用前4列
-              
-              // 处理ANSI转义序列
-              const processedOutput = message.output;
-              
-              // 创建一个自定义的单元格渲染器
-              if (!hotInstance.getCellMeta(rowIndex, columnIndex).renderer) {
-                hotInstance.setCellMeta(rowIndex, columnIndex, 'renderer', function(instance, td, row, col, prop, value) {
-                  // 默认渲染
-                  Handsontable.renderers.TextRenderer.apply(this, arguments);
-                  
-                  // 如果有值，应用ANSI转换
-                  if (value) {
-                    // 使用innerHTML设置转换后的HTML
-                    td.innerHTML = ansiToHtml(value);
-                    
-                    // 添加自定义类以应用额外样式
-                    td.className += ' ansi-enabled-cell';
-                  }
-                });
-              }
-              
-              // 设置原始值（不带HTML）到单元格数据
-              hotInstance.setDataAtCell(rowIndex, columnIndex, processedOutput);
-              
-              // 确保单元格仍可选择和复制
-              const cellMeta = hotInstance.getCellMeta(rowIndex, columnIndex);
-              cellMeta.copyable = true;
-              
-              // 重新渲染表格
-              hotInstance.render();
-            }
-          } else if (message.output) {
-            // 如果没有指定命令，将输出添加到通用输出字段
-            const lastColumnIndex = hotInstance.countCols() - 1;
-            
-            // 处理ANSI转义序列
-            const processedOutput = message.output;
-            
-            // 创建一个自定义的单元格渲染器
-            if (!hotInstance.getCellMeta(rowIndex, lastColumnIndex).renderer) {
-              hotInstance.setCellMeta(rowIndex, lastColumnIndex, 'renderer', function(instance, td, row, col, prop, value) {
-                // 默认渲染
-                Handsontable.renderers.TextRenderer.apply(this, arguments);
-                
-                // 如果有值，应用ANSI转换
-                if (value) {
-                  // 使用innerHTML设置转换后的HTML
-                  td.innerHTML = ansiToHtml(value);
-                  
-                  // 添加自定义类以应用额外样式
-                  td.className += ' ansi-enabled-cell';
-                }
-              });
-            }
-            
-            // 设置原始值（不带HTML）到单元格数据
-            hotInstance.setDataAtCell(rowIndex, lastColumnIndex, processedOutput);
-            
-            // 确保单元格仍可选择和复制
-            const cellMeta = hotInstance.getCellMeta(rowIndex, lastColumnIndex);
-            cellMeta.copyable = true;
-            
-            // 重新渲染表格
-            hotInstance.render();
-          }
-        };
-        
-        ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          setConnectionStatus('error');
-          setErrorMessages(prevErrors => [...prevErrors, 'WebSocket connection error']);
-        };
-
-        ws.onclose = () => {
-          console.log('WebSocket connection closed');
-          setIsRunning(false);
-          setConnectionStatus(null);
-        };
-
+        const { job_id: newJobId } = await res.json();
+        activeCommandsRef.current = currentCommands;
+        setJobId(newJobId);
+        setJobStatus('queued');
+        setJobSince(0);
+        setConnectionStatus('connecting');
+        setJobProgress({
+          total: currentCommands.length * currentArrayData.length,
+          completed: 0
+        });
       } else {
         console.error('Failed to send commands to the backend:', await res.text());
         setConnectionStatus('error');
@@ -673,6 +638,80 @@ export default function App() {
       setIsRunning(false);
     }
   };
+
+  const cancelJob = async () => {
+    if (!jobId) return;
+    try {
+      const res = await fetch(`/api/v1/jobs/${jobId}/cancel`, { method: 'POST' });
+      if (!res.ok) {
+        const errorText = await res.text();
+        setErrorMessages(prevErrors => [...prevErrors, `Cancel failed: ${errorText}`]);
+      }
+    } catch (error) {
+      setErrorMessages(prevErrors => [...prevErrors, `Cancel error: ${error.message}`]);
+    }
+  };
+
+  useEffect(() => {
+    if (!jobId || !isRunning) return;
+
+    let isActive = true;
+
+    const pollStatus = async () => {
+      const hotInstance = hotRef.current?.hotInstance;
+      if (!hotInstance) return;
+
+      try {
+        const res = await fetch(`/api/v1/jobs/${jobId}?since=${jobSince}`);
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+
+        const data = await res.json();
+        if (!isActive) return;
+
+        setJobStatus(data.status);
+        setJobProgress({
+          total: data.progress?.total_commands ?? 0,
+          completed: data.progress?.completed_commands ?? 0
+        });
+
+        if (data.status === 'running') {
+          setConnectionStatus('connected');
+        } else if (data.status === 'queued') {
+          setConnectionStatus('connecting');
+        } else if (data.status === 'failed' || data.status === 'canceled') {
+          setConnectionStatus('error');
+        } else {
+          setConnectionStatus(null);
+        }
+
+        if (data.messages?.length) {
+          data.messages.forEach(message => applyJobMessage(message, hotInstance));
+        }
+
+        if (typeof data.next_since === 'number') {
+          setJobSince(data.next_since);
+        }
+
+        if (['completed', 'failed', 'canceled'].includes(data.status)) {
+          setIsRunning(false);
+        }
+      } catch (error) {
+        setConnectionStatus('error');
+        setErrorMessages(prevErrors => [...prevErrors, `Job polling error: ${error.message}`]);
+        setIsRunning(false);
+      }
+    };
+
+    pollStatus();
+    const intervalId = setInterval(pollStatus, 2000);
+
+    return () => {
+      isActive = false;
+      clearInterval(intervalId);
+    };
+  }, [jobId, isRunning, jobSince]);
 
   // 添加新命令列
   const addCommandColumn = (index, commandName) => {
@@ -1252,6 +1291,14 @@ export default function App() {
           {isRunning ? 'Running Commands' : 'Run Commands'}
           {isRunning && <span className="loading"></span>}
         </button>
+
+        <button
+          onClick={cancelJob}
+          className={`button secondary-button ${!isRunning ? 'disabled' : ''}`}
+          disabled={!isRunning}
+        >
+          Cancel Job
+        </button>
         
         <button 
           onClick={openSaveConfigModal} 
@@ -1328,12 +1375,14 @@ export default function App() {
         </div>
         
         <div className="status-and-errors">
-          {connectionStatus && (
-            <div className={`status-indicator status-${connectionStatus}`}>
+          {jobStatus && (
+            <div className={`status-indicator status-${jobStatus}`}>
               <span className="status-dot"></span>
-              {connectionStatus === 'connecting' && 'Connecting...'}
-              {connectionStatus === 'connected' && 'Connected'}
-              {connectionStatus === 'error' && 'Connection Error'}
+              {jobStatus === 'queued' && 'Queued'}
+              {jobStatus === 'running' && `Running ${jobProgress.completed}/${jobProgress.total}`}
+              {jobStatus === 'completed' && 'Completed'}
+              {jobStatus === 'failed' && 'Failed'}
+              {jobStatus === 'canceled' && 'Canceled'}
             </div>
           )}
           
