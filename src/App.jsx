@@ -53,7 +53,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null);
   const [errorMessages, setErrorMessages] = useState([]);
-  const isDebugMode = process.env.NODE_ENV === 'development';
+  const isDebugMode = import.meta.env.MODE === 'development';
   
   // 跳板机相关状态
   const [useJumpServer, setUseJumpServer] = useState(false);

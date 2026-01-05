@@ -1,0 +1,28 @@
+{
+  "name": "cyclops-cmd",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@handsontable/react": "^16.1.0",
+    "@radix-ui/react-alert-dialog": "^1.0.5",
+    "@radix-ui/react-dialog": "^1.0.5",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "handsontable": "^16.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.3"
+  }
+}
