@@ -1,3 +1,5 @@
 fastapi
 uvicorn[standard]
 asyncssh
+pytest
+build
