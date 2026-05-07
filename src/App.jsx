@@ -46,6 +46,10 @@ const initialData = [
 // 初始命令列
 const initialCommands = ['uname -a'];
 
+// 可选配置远端 API 地址，便于 GitHub Pages 等静态托管环境连接独立部署的后端。
+const API_BASE_URL = (import.meta.env.VITE_BACKEND_API_BASE_URL || '').replace(/\/$/, '');
+const apiUrl = (path) => `${API_BASE_URL}${path}`;
+
 export default function App() {
   const hotRef = useRef(null);
   const [objectData, setObjectData] = useState(initialData);
@@ -147,7 +151,7 @@ export default function App() {
   const fetchConfigs = async () => {
     try {
       setConfigLoading(true);
-      const res = await fetch('/api/v1/configs');
+      const res = await fetch(apiUrl('/api/v1/configs'));
       if (res.ok) {
         const configs = await res.json();
         setSavedConfigs(configs);
@@ -228,7 +232,7 @@ export default function App() {
     }
     
     try {
-      const res = await fetch('/api/v1/configs', {
+      const res = await fetch(apiUrl('/api/v1/configs'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -297,7 +301,7 @@ export default function App() {
     setShowDropdown(false);
     
     try {
-      const res = await fetch(`/api/v1/configs/${configId}`);
+      const res = await fetch(apiUrl(`/api/v1/configs/${configId}`));
       if (res.ok) {
         const result = await res.json();
         
@@ -346,7 +350,7 @@ export default function App() {
     setConfigLoading(true);
     
     try {
-      const res = await fetch(`/api/v1/configs/${configId}`, {
+      const res = await fetch(apiUrl(`/api/v1/configs/${configId}`), {
         method: 'DELETE'
       });
       
@@ -521,7 +525,7 @@ export default function App() {
     });
 
     try {
-      const res = await fetch('/api/v1/execute', {
+      const res = await fetch(apiUrl('/api/v1/execute'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rows)
@@ -531,10 +535,10 @@ export default function App() {
         const { room } = await res.json();
         console.log("WebSocket room:", room);
         
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsHost = import.meta.env.VITE_BACKEND_WS_HOST || window.location.hostname;
-        const wsPort = import.meta.env.VITE_BACKEND_WS_PORT || '8000';
-        const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}/ws/${room}`;
+        const wsBaseUrl = import.meta.env.VITE_BACKEND_WS_URL;
+        const wsUrl = wsBaseUrl
+          ? `${wsBaseUrl.replace(/\/$/, '')}/ws/${room}`
+          : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${import.meta.env.VITE_BACKEND_WS_HOST || window.location.hostname}:${import.meta.env.VITE_BACKEND_WS_PORT || '8000'}/ws/${room}`;
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
