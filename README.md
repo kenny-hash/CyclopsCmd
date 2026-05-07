@@ -32,6 +32,8 @@ CyclopsCmd/
 │   ├── build_backend.sh         # 后端 Python 包构建脚本
 │   ├── start.sh                 # 一键启动前端与后端的开发脚本
 │   └── test_backend.sh          # 后端测试脚本
+├── desktop/
+│   └── electron/                # 独立 Electron 桌面壳与打包配置，不影响原 Web 模式
 └── src/
     ├── App.jsx                  # 前端主页面与批量执行交互逻辑
     ├── App.css                  # 主页面样式
@@ -140,7 +142,22 @@ npm test -- --run
 
 # 后端包构建
 ./scripts/build_backend.sh
+
+# Electron 桌面壳开发与打包
+cd desktop/electron
+npm install
+npm run dev
+npm run build
 ```
+
+
+## Electron 桌面打包
+
+仓库新增 `desktop/electron/` 作为独立桌面壳工程，用于把现有 React 前端和 FastAPI 后端打包为可分发 App；原有 Web 开发、静态部署和前后端分离运行方式不变。
+
+桌面壳会在启动时选择空闲本地端口，拉起本地 FastAPI 后端，并通过 preload 将 API 与 WebSocket 地址注入前端。后端 SQLite 数据会保存到 Electron 用户数据目录下，避免继续使用仓库根目录的 `test.db`。
+
+更多开发、构建和分发说明见 `desktop/electron/README.md`。
 
 ## API 与运行说明
 

@@ -1,0 +1,60 @@
+{
+  "name": "cyclops-cmd-electron",
+  "version": "0.1.0",
+  "description": "Electron desktop shell for CyclopsCmd",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "build:frontend": "cd ../.. && npm run build",
+    "build:backend": "node scripts/build-backend-sidecar.cjs",
+    "build": "npm run build:frontend && npm run build:backend && electron-builder",
+    "pack": "npm run build:frontend && npm run build:backend && electron-builder --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.cyclopscmd.desktop",
+    "productName": "CyclopsCmd",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../dist",
+        "to": "frontend"
+      },
+      {
+        "from": "resources/backend-sidecar",
+        "to": "backend-sidecar"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

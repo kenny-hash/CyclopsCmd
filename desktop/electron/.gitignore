@@ -1,0 +1,5 @@
+node_modules/
+release/
+.backend-build/
+resources/backend-sidecar/*
+!resources/backend-sidecar/.gitkeep
