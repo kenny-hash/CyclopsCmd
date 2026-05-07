@@ -4,3 +4,4 @@ asyncssh
 SQLAlchemy
 pytest
 build
+httpx

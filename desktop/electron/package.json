@@ -55,6 +55,12 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Utility",
+      "target": [
+        "tar.gz"
+      ]
     }
   }
 }
