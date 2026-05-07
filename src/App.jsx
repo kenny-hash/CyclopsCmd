@@ -532,8 +532,8 @@ export default function App() {
         console.log("WebSocket room:", room);
         
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsHost = window.location.hostname;
-        const wsPort = '8000';
+        const wsHost = import.meta.env.VITE_BACKEND_WS_HOST || window.location.hostname;
+        const wsPort = import.meta.env.VITE_BACKEND_WS_PORT || '8000';
         const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}/ws/${room}`;
         const ws = new WebSocket(wsUrl);
 
