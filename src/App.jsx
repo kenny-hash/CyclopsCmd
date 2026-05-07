@@ -47,7 +47,9 @@ const initialData = [
 const initialCommands = ['uname -a'];
 
 // 可选配置远端 API 地址，便于 GitHub Pages 等静态托管环境连接独立部署的后端。
-const API_BASE_URL = (import.meta.env.VITE_BACKEND_API_BASE_URL || '').replace(/\/$/, '');
+// Electron 桌面壳会通过 preload 注入本地后端地址；普通 Web 模式仍沿用 Vite 环境变量。
+const desktopConfig = window.__CYCLOPS_DESKTOP_CONFIG__ || {};
+const API_BASE_URL = (desktopConfig.apiBaseUrl || import.meta.env.VITE_BACKEND_API_BASE_URL || '').replace(/\/$/, '');
 const apiUrl = (path) => `${API_BASE_URL}${path}`;
 
 export default function App() {
@@ -535,7 +537,7 @@ export default function App() {
         const { room } = await res.json();
         console.log("WebSocket room:", room);
         
-        const wsBaseUrl = import.meta.env.VITE_BACKEND_WS_URL;
+        const wsBaseUrl = desktopConfig.wsBaseUrl || import.meta.env.VITE_BACKEND_WS_URL;
         const wsUrl = wsBaseUrl
           ? `${wsBaseUrl.replace(/\/$/, '')}/ws/${room}`
           : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${import.meta.env.VITE_BACKEND_WS_HOST || window.location.hostname}:${import.meta.env.VITE_BACKEND_WS_PORT || '8000'}/ws/${room}`;
