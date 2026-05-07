@@ -159,3 +159,47 @@ npm test -- --run
 - 不建议在代码、README 或配置模板中保存真实服务器密码。
 - 跳板机与目标服务器凭据应通过安全的运行时输入、密钥管理或加密配置管理方案维护。
 - 批量执行命令具备较高风险，请先在测试服务器验证命令效果。
+
+## GitHub Actions 自动测试与部署到 Pages
+
+本项目已提供 `.github/workflows/pages.yml`，用于在 GitHub Actions 中自动完成前端测试、后端测试、前端构建，并把构建产物发布到 GitHub Pages。
+
+### 工作流会做什么
+
+- 在 `push` 到 `main`、创建/更新 Pull Request、或手动触发 `workflow_dispatch` 时运行。
+- 使用 Node.js 20 执行 `npm ci`、`npm test -- --run` 和 `npm run build`。
+- 使用 Python 3.11 安装 `backend/requirements.txt` 并执行 `./scripts/test_backend.sh`。
+- Pull Request 只测试和构建，不部署。
+- 非 Pull Request 事件（例如推送到 `main` 或手动触发）会把 `dist/` 部署到 GitHub Pages。
+
+> 注意：GitHub Pages 只能托管静态前端资源，不能运行 FastAPI 后端。部署后的页面若要调用接口，需要将后端单独部署到可公网访问的平台，并在构建时按需设置 `VITE_BACKEND_API_BASE_URL` 和 `VITE_BACKEND_WS_URL`。
+
+### 首次启用步骤
+
+1. 将代码推送到 GitHub 仓库，并确保默认分支或部署分支名为 `main`；如果你的默认分支是 `master`，请把 `.github/workflows/pages.yml` 里的 `branches: [main]` 改为 `master`。
+2. 打开 GitHub 仓库页面，进入 **Settings → Pages**。
+3. 在 **Build and deployment** 中将 **Source** 选择为 **GitHub Actions**。
+4. 推送一次到 `main`，或进入 **Actions → Test and deploy to GitHub Pages → Run workflow** 手动运行。
+5. 工作流成功后，在 **Settings → Pages** 或 Actions 部署日志中查看访问地址，通常是 `https://<用户名或组织名>.github.io/<仓库名>/`。
+
+### 路径配置说明
+
+Vite 默认按站点根路径构建。GitHub Pages 的项目站点通常部署在 `/<仓库名>/` 子路径下，因此工作流在构建时设置：
+
+```yaml
+env:
+  VITE_BASE_PATH: /${{ github.event.repository.name }}/
+```
+
+`vite.config.js` 会读取 `VITE_BASE_PATH`，本地开发未设置该变量时仍使用 `/`，所以不影响 `npm run dev`。
+
+如果你使用自定义域名并将站点部署到域名根路径，可以把工作流中的 `VITE_BASE_PATH` 改为 `/`。
+
+### 连接单独部署的后端
+
+如果前端部署在 GitHub Pages，而 FastAPI 后端部署在其他平台（例如云服务器、容器平台或 Serverless 平台），建议在 GitHub 仓库的 **Settings → Secrets and variables → Actions → Variables** 中添加：
+
+- `VITE_BACKEND_API_BASE_URL`：后端 HTTP(S) 地址，例如 `https://api.example.com`。前端会请求 `${VITE_BACKEND_API_BASE_URL}/api/v1/...`。
+- `VITE_BACKEND_WS_URL`：后端 WebSocket 地址，例如 `wss://api.example.com`。前端会连接 `${VITE_BACKEND_WS_URL}/ws/<room>`。
+
+如果不设置这两个变量，前端会继续使用相对路径 `/api/v1/...`，WebSocket 会默认连接当前页面域名的 `8000` 端口，适合本地开发但通常不适合 GitHub Pages。
