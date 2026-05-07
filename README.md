@@ -220,3 +220,45 @@ env:
 - `VITE_BACKEND_WS_URL`：后端 WebSocket 地址，例如 `wss://api.example.com`。前端会连接 `${VITE_BACKEND_WS_URL}/ws/<room>`。
 
 如果不设置这两个变量，前端会继续使用相对路径 `/api/v1/...`，WebSocket 会默认连接当前页面域名的 `8000` 端口，适合本地开发但通常不适合 GitHub Pages。
+
+## GitHub Actions 构建 Electron App 与发布 Release
+
+本项目还提供 `.github/workflows/electron-release.yml`，用于在 GitHub Actions 中自动完成测试、Web 前端构建、后端 sidecar 打包，以及 Windows、macOS、Linux 三个平台的 Electron 安装包构建。
+
+### 工作流触发方式
+
+- `pull_request`：运行测试并验证 Electron App 能否成功构建，产物只保留为 Actions artifact。
+- `push` 到 `main`：运行测试和构建，产物可在对应 Actions run 的 **Artifacts** 区域下载，便于本地临时测试。
+- 推送 `v*` 标签（例如 `v0.1.0`）：运行测试和构建，并把安装包上传到 GitHub Release 页面。
+- `workflow_dispatch`：支持在 GitHub Actions 页面手动触发一次完整测试和构建。
+
+### 本地与 CI 使用的测试命令
+
+```bash
+# 前端单元测试（Vitest）
+npm test -- --run
+
+# 前端生产构建
+npm run build
+
+# 后端 API/冒烟测试（pytest）
+./scripts/test_backend.sh
+
+# Electron 桌面 App 打包
+cd desktop/electron
+npm ci
+npm run build
+```
+
+### 在 GitHub Release 页面提供可下载 App
+
+GitHub 当前功能可以完成这个需求：当你推送形如 `v0.1.0` 的 Git tag 后，`electron-release.yml` 会在 GitHub Release 中创建/更新对应 Release，并上传各平台构建产物。示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+构建完成后，进入仓库的 **Releases** 页面即可下载 Windows、macOS、Linux 对应的安装包或压缩包。
+
+> 注意：当前工作流禁用了 macOS 代码签名自动发现（`CSC_IDENTITY_AUTO_DISCOVERY=false`），因此生成的 macOS App 适合本地测试；如果要正式分发，建议后续接入 Apple Developer 证书、公证流程，以及 Windows 代码签名证书。

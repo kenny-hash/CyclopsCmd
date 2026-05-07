@@ -1,0 +1,122 @@
+name: Test and build Electron app
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: electron-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test frontend and backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test -- --run
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+
+      - name: Run backend tests
+        run: ./scripts/test_backend.sh
+
+  build-electron:
+    name: Build Electron app (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact-name: cyclopscmd-linux
+            files: |
+              desktop/electron/release/*.tar.gz
+          - os: windows-latest
+            artifact-name: cyclopscmd-windows
+            files: |
+              desktop/electron/release/*.exe
+              desktop/electron/release/*.zip
+          - os: macos-latest
+            artifact-name: cyclopscmd-macos
+            files: |
+              desktop/electron/release/*.dmg
+              desktop/electron/release/*.zip
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Electron dependencies
+        working-directory: desktop/electron
+        run: npm ci
+
+      - name: Build Electron distributables
+        working-directory: desktop/electron
+        run: npm run build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload files to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.files }}
+          generate_release_notes: true
