@@ -12,6 +12,7 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "asyncssh",
+  "SQLAlchemy",
 ]
 
 [tool.setuptools]
