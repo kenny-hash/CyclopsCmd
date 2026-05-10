@@ -6,7 +6,7 @@
   "main": "main.cjs",
   "scripts": {
     "dev": "electron .",
-    "build:frontend": "cd ../.. && npm run build",
+    "build:frontend": "node scripts/build-frontend.cjs",
     "build:backend": "node scripts/build-backend-sidecar.cjs",
     "build": "npm run build:frontend && npm run build:backend && electron-builder",
     "pack": "npm run build:frontend && npm run build:backend && electron-builder --dir"

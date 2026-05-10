@@ -10,6 +10,32 @@ const BACKEND_START_TIMEOUT_MS = 30000;
 let backendProcess = null;
 let backendPort = null;
 let mainWindow = null;
+let logFilePath = null;
+
+function ensureLogFile() {
+  if (logFilePath) {
+    return logFilePath;
+  }
+
+  const logsDir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  logFilePath = path.join(logsDir, 'main.log');
+  return logFilePath;
+}
+
+function appendLog(level, message) {
+  const line = `[${new Date().toISOString()}] [${level}] ${message}\n`;
+  if (app.isReady()) {
+    fs.appendFileSync(ensureLogFile(), line);
+  }
+
+  const writer = level === 'ERROR' ? console.error : console.log;
+  writer(line.trimEnd());
+}
+
+function isDebugEnabled() {
+  return !app.isPackaged || process.env.CYCLOPSCMD_DEBUG === '1';
+}
 
 function projectRoot() {
   return path.resolve(__dirname, '..', '..');
@@ -117,15 +143,19 @@ async function startBackend() {
   });
 
   backendProcess.stdout.on('data', (data) => {
-    console.log(`[backend] ${data.toString().trimEnd()}`);
+    appendLog('INFO', `[backend] ${data.toString().trimEnd()}`);
   });
 
   backendProcess.stderr.on('data', (data) => {
-    console.error(`[backend] ${data.toString().trimEnd()}`);
+    appendLog('ERROR', `[backend] ${data.toString().trimEnd()}`);
+  });
+
+  backendProcess.once('error', (error) => {
+    appendLog('ERROR', `[backend] failed to start: ${error.message}`);
   });
 
   backendProcess.once('exit', (code, signal) => {
-    console.log(`[backend] exited code=${code} signal=${signal}`);
+    appendLog('INFO', `[backend] exited code=${code} signal=${signal}`);
     backendProcess = null;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('cyclopscmd-backend-exit', { code, signal });
@@ -165,9 +195,23 @@ async function createWindow() {
     },
   });
 
-  await mainWindow.loadURL(frontendUrl());
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    appendLog('INFO', `[renderer:${level}] ${message} (${sourceId}:${line})`);
+  });
 
-  if (!app.isPackaged) {
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    appendLog('ERROR', `[renderer] failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    appendLog('ERROR', `[renderer] process gone: ${details.reason} exitCode=${details.exitCode}`);
+  });
+
+  const url = frontendUrl();
+  appendLog('INFO', `Loading frontend: ${url}`);
+  await mainWindow.loadURL(url);
+
+  if (isDebugEnabled()) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 }
@@ -192,7 +236,7 @@ app.whenReady()
   .then(startBackend)
   .then(createWindow)
   .catch((error) => {
-    console.error(error);
+    appendLog('ERROR', error.stack || error.message || String(error));
     dialog.showErrorBox('CyclopsCmd 启动失败', error.message || String(error));
     app.quit();
   });
@@ -206,7 +250,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow().catch((error) => {
-      console.error(error);
+      appendLog('ERROR', error.stack || error.message || String(error));
       dialog.showErrorBox('CyclopsCmd 窗口启动失败', error.message || String(error));
     });
   }
