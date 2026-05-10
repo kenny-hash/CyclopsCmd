@@ -11,6 +11,7 @@ desktop/electron/
 ├── package.json                     # Electron 独立依赖、构建脚本和 electron-builder 配置
 ├── pyinstaller/backend_entry.py     # PyInstaller 后端入口，打包后启动 FastAPI
 ├── resources/backend-sidecar/       # 后端 sidecar 构建输出目录，不提交二进制产物
+├── scripts/build-frontend.cjs        # 使用相对 base 路径构建 Electron 前端资源
 └── scripts/build-backend-sidecar.cjs # 使用 PyInstaller 构建后端 sidecar
 ```
 
@@ -64,7 +65,7 @@ npm run build
 
 `npm run build` 会依次执行：
 
-1. `npm run build:frontend`：调用仓库根目录的 `npm run build` 生成 `dist/`。
+1. `npm run build:frontend`：调用仓库根目录的 `npm run build -- --base=./` 生成适合 Electron 本地文件加载的 `dist/`。
 2. `npm run build:backend`：使用 PyInstaller 把 FastAPI 后端打包为 `resources/backend-sidecar/cyclopscmd-backend`。
 3. `electron-builder`：生成 Windows 或 macOS 桌面安装包。
 
