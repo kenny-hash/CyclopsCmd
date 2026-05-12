@@ -6,9 +6,12 @@ import datetime
 import time
 import traceback
 from fastapi import FastAPI, WebSocket, HTTPException
-from typing import List, Dict, Any, Optional
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from typing import List, Dict, Any, Optional, Annotated
 import asyncssh
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, IPvAnyAddress, StringConstraints, field_validator, model_validator
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
@@ -113,9 +116,96 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"error": error_payload("VALIDATION_ERROR", details=exc.errors())}),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    detail = exc.detail
+    if isinstance(detail, dict) and "code" in detail and "message" in detail:
+        error = detail
+    else:
+        error = error_payload("VALIDATION_ERROR" if exc.status_code == 400 else "INTERNAL_ERROR", str(detail))
+    return JSONResponse(status_code=exc.status_code, content={"error": error})
+
 # SSH连接池
 ssh_connections = {}
 jump_server_connections = {}  # 跳板机连接池
+
+ERROR_MESSAGES = {
+    "VALIDATION_ERROR": "请求参数校验失败，请修正后重试。",
+    "SSH_AUTH_FAILED": "SSH 认证失败，请检查用户名、密码或跳板机密钥配置。",
+    "SSH_CONNECTION_TIMEOUT": "SSH 连接超时，请检查目标地址、端口和网络连通性。",
+    "SSH_CONNECTION_LOST": "SSH 连接已断开，请检查网络稳定性后重试。",
+    "SSH_CONNECTION_REFUSED": "SSH 连接被拒绝，请检查端口是否开放或服务是否运行。",
+    "SSH_CONNECTION_FAILED": "SSH 连接失败，请检查服务器配置。",
+    "SSH_CHANNEL_ERROR": "SSH 通道打开失败，请检查服务器会话限制或网络状态。",
+    "COMMAND_TIMEOUT": "命令执行超时，请检查命令是否长时间阻塞。",
+    "COMMAND_EXECUTION_FAILED": "命令执行失败，请检查命令内容或服务器状态。",
+    "INTERNAL_ERROR": "服务内部错误，请稍后重试。",
+}
+
+
+def error_payload(code: str, message: Optional[str] = None, details: Optional[Any] = None) -> Dict[str, Any]:
+    """Build a consistent error object for HTTP and WebSocket responses."""
+    payload = {
+        "code": code,
+        "message": message or ERROR_MESSAGES.get(code, ERROR_MESSAGES["INTERNAL_ERROR"]),
+    }
+    if details is not None:
+        payload["details"] = details
+    return payload
+
+
+def websocket_error(row_id: Optional[str], code: str, message: Optional[str] = None, command: Optional[str] = None, details: Optional[Any] = None) -> Dict[str, Any]:
+    """Build a WebSocket error message while keeping legacy fields for older clients."""
+    error = error_payload(code, message, details)
+    payload = {
+        "error": error,
+        "errorCode": error["code"],
+        "errorMessage": error["message"],
+    }
+    if row_id is not None:
+        payload["rowId"] = row_id
+    if command is not None:
+        payload["command"] = command
+    return payload
+
+
+def classify_ssh_error(exc: Exception) -> Dict[str, str]:
+    """Classify SSH connection failures into safe, client-facing error codes."""
+    if isinstance(exc, asyncssh.misc.PermissionDenied):
+        return error_payload("SSH_AUTH_FAILED")
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return error_payload("SSH_CONNECTION_TIMEOUT")
+    if isinstance(exc, (asyncssh.misc.ConnectionLost, asyncssh.misc.DisconnectError)):
+        return error_payload("SSH_CONNECTION_LOST")
+    if isinstance(exc, asyncssh.misc.ChannelOpenError):
+        return error_payload("SSH_CHANNEL_ERROR")
+    if isinstance(exc, (ConnectionRefusedError, ConnectionResetError, BrokenPipeError)):
+        return error_payload("SSH_CONNECTION_REFUSED")
+    if isinstance(exc, OSError):
+        message = str(exc).lower()
+        if "refused" in message:
+            return error_payload("SSH_CONNECTION_REFUSED")
+        if "timed out" in message or "timeout" in message:
+            return error_payload("SSH_CONNECTION_TIMEOUT")
+    return error_payload("SSH_CONNECTION_FAILED")
+
+
+def classify_command_error(exc: Exception) -> Dict[str, str]:
+    """Classify command execution failures into safe, client-facing error codes."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return error_payload("COMMAND_TIMEOUT")
+    if isinstance(exc, (asyncssh.misc.ConnectionLost, asyncssh.misc.DisconnectError, asyncssh.misc.ChannelOpenError)):
+        return classify_ssh_error(exc)
+    return error_payload("COMMAND_EXECUTION_FAILED")
 
 async def get_jump_server_connection(jump_host, jump_username, jump_port=22):
     """获取跳板机SSH连接或创建新连接"""
@@ -429,23 +519,46 @@ websockets = {}
 active_rooms = {}  # 存储房间信息，包括请求ID
 
 # 数据模型定义
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+CommandStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+PortNumber = Annotated[int, Field(ge=1, le=65535)]
+
+
 class JumpServerConfig(BaseModel):
     enabled: bool = False
-    ip: Optional[str] = None
-    user: Optional[str] = None
-    port: Optional[int] = 22
+    ip: Optional[IPvAnyAddress] = None
+    user: Optional[NonEmptyStr] = None
+    port: PortNumber = 22
+
+    @model_validator(mode="after")
+    def require_jump_fields_when_enabled(self):
+        if self.enabled and (self.ip is None or self.user is None):
+            raise ValueError("Jump server IP and username are required when jump server is enabled")
+        return self
+
+    @field_validator("ip")
+    @classmethod
+    def stringify_ip(cls, value):
+        return str(value) if value is not None else value
+
 
 class Row(BaseModel):
-    ip: str
-    user: str
-    password: str
-    port: int
-    commands: List[str]
-    rowId: str
+    ip: IPvAnyAddress
+    user: NonEmptyStr
+    password: NonEmptyStr
+    port: PortNumber
+    commands: Annotated[List[CommandStr], Field(min_length=1)]
+    rowId: NonEmptyStr
     jumpServer: Optional[JumpServerConfig] = None
 
+    @field_validator("ip")
+    @classmethod
+    def stringify_ip(cls, value):
+        return str(value)
+
+
 class ConfigData(BaseModel):
-    name: str
+    name: NonEmptyStr
     data: Dict[str, Any]
 
 def get_db():
@@ -548,10 +661,16 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                         error_msg = f"Jump server connection failed after {max_retries} attempts: {last_error}"
                     
                     logger.error(error_msg, extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
-                    await ws.send_json({
-                        "rowId": row.rowId,
-                        "error": error_msg,
-                    })
+                    ssh_error = classify_ssh_error(last_error)
+                    if use_jump_server:
+                        ssh_error["message"] = f"跳板机连接失败：{ssh_error['message']}"
+
+                    await ws.send_json(websocket_error(
+                        row.rowId,
+                        ssh_error["code"],
+                        ssh_error["message"],
+                        details={"attempts": max_retries},
+                    ))
                     return  # 结束函数执行
         
         if conn is None:
@@ -707,11 +826,14 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             logger.error(f"Max retries reached for command execution due to connection issues", 
                                        extra={"request_id": request_id, "row_id": row.rowId, "command": cmd})
                             
-                            await ws.send_json({
-                                "rowId": row.rowId,
-                                "command": cmd,
-                                "error": f"SSH connection failed after {max_retries} attempts: {e}"
-                            })
+                            ssh_error = classify_ssh_error(e)
+                            await ws.send_json(websocket_error(
+                                row.rowId,
+                                ssh_error["code"],
+                                ssh_error["message"],
+                                command=cmd,
+                                details={"attempts": max_retries},
+                            ))
                             break
                     
                     except asyncio.TimeoutError:
@@ -729,11 +851,12 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             logger.error(f"Command execution timed out after {execution_time:.2f}s and {max_retries} attempts", 
                                        extra={"request_id": request_id, "row_id": row.rowId, "command": cmd})
                             
-                            await ws.send_json({
-                                "rowId": row.rowId,
-                                "command": cmd,
-                                "error": "Command execution timed out after multiple attempts"
-                            })
+                            await ws.send_json(websocket_error(
+                                row.rowId,
+                                "COMMAND_TIMEOUT",
+                                details={"attempts": max_retries},
+                                command=cmd,
+                            ))
                             break
                     
                     except Exception as e:
@@ -754,11 +877,13 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             await asyncio.sleep(2 ** retry_count)
                         else:
                             # 重试次数用尽
-                            await ws.send_json({
-                                "rowId": row.rowId,
-                                "command": cmd,
-                                "error": f"{type(e).__name__}: {str(e)}"
-                            })
+                            command_error = classify_command_error(e)
+                            await ws.send_json(websocket_error(
+                                row.rowId,
+                                command_error["code"],
+                                command_error["message"],
+                                command=cmd,
+                            ))
                             break
         
         # 使用有限的并发度执行命令，防止过载
@@ -785,10 +910,12 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                    exc_info=True,
                    extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
         
-        await ws.send_json({
-            "rowId": row.rowId,
-            "error": f"{type(exc).__name__}: {exc}",
-        })
+        session_error = classify_command_error(exc)
+        await ws.send_json(websocket_error(
+            row.rowId,
+            session_error["code"],
+            session_error["message"],
+        ))
 
 from sqlalchemy import text
 from sqlalchemy import inspect
@@ -826,15 +953,15 @@ async def execute(rows: List[Row]):
     # 验证请求数据
     if not rows:
         logger.warning(f"Empty request received", extra={"request_id": request_id})
-        raise HTTPException(status_code=400, detail="No server data provided")
+        raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "No server data provided"))
     
     # 验证跳板机配置
     for row in rows:
         if row.jumpServer and row.jumpServer.enabled:
             if not row.jumpServer.ip or not row.jumpServer.ip.strip():
-                raise HTTPException(status_code=400, detail="Jump server IP is required when jump server is enabled")
+                raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "Jump server IP is required when jump server is enabled"))
             if not row.jumpServer.user or not row.jumpServer.user.strip():
-                raise HTTPException(status_code=400, detail="Jump server username is required when jump server is enabled")
+                raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "Jump server username is required when jump server is enabled"))
     
     # 存储房间信息
     active_rooms[room] = {
@@ -878,7 +1005,7 @@ async def websocket_endpoint(ws: WebSocket, room: str):
     
     if not rows:
         logger.error(f"No data found for room", extra={"request_id": request_id, "room": room})
-        await ws.send_json({"error": "No data available for this room."})
+        await ws.send_json(websocket_error(None, "VALIDATION_ERROR", "No data available for this room."))
         await ws.close()
         return
     
@@ -913,7 +1040,7 @@ async def websocket_endpoint(ws: WebSocket, room: str):
         logger.error(f"Error in WebSocket processing", 
                    exc_info=True,
                    extra={"request_id": request_id, "room": room})
-        await ws.send_json({"error": str(e)})
+        await ws.send_json(websocket_error(None, "INTERNAL_ERROR"))
     finally:
         # 清理 WebSocket 连接
         websockets.pop(room, None)

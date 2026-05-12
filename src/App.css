@@ -1152,3 +1152,23 @@ input:disabled + .slider:before {
   height: 100%;
   display: block;
 }
+.validation-errors-container {
+  background-color: hsl(0 85.7% 97.3%);
+  border: 1px solid hsl(0 85.7% 87.3%);
+  border-radius: 0.5rem;
+  margin-top: 0.75rem;
+  max-width: 48rem;
+  overflow: hidden;
+}
+
+.validation-error-item {
+  color: hsl(0 72.2% 30.6%);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid hsl(0 85.7% 90%);
+}
+
+.validation-error-item:first-child {
+  border-top: none;
+}
