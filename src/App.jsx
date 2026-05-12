@@ -53,6 +53,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null);
   const [errorMessages, setErrorMessages] = useState([]);
+  const [jumpServerErrors, setJumpServerErrors] = useState({});
   const isDebugMode = process.env.NODE_ENV === 'development';
   
   // 跳板机相关状态
@@ -458,6 +459,75 @@ export default function App() {
     event.target.value = null;
   };
 
+  const formatErrorMessage = (error) => {
+    if (!error) {
+      return 'Unknown error';
+    }
+    if (typeof error === 'string') {
+      return error;
+    }
+    if (error.code) {
+      let message = `[${error.code}] ${error.message || 'Error'}`;
+      if (error.detail) {
+        message += ` (${error.detail})`;
+      }
+      return message;
+    }
+    return 'Unknown error';
+  };
+
+  const isValidIpAddress = (value) => {
+    const ip = String(value || '').trim();
+    const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+    if (ipv4Pattern.test(ip)) {
+      return true;
+    }
+
+    if (!ip.includes(':') || !/^[0-9a-fA-F:.]+$/.test(ip)) {
+      return false;
+    }
+
+    try {
+      new URL(`http://[${ip}]/`);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const isValidPort = (value) => {
+    const port = Number(value);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  };
+
+  const formatValidationErrors = (detail) => {
+    if (!detail) {
+      return ['Validation failed'];
+    }
+    if (Array.isArray(detail)) {
+      return detail.map((item) => {
+        const location = Array.isArray(item.loc) ? item.loc : [];
+        const rowIndex = location.includes('body') && typeof location[1] === 'number' ? location[1] + 1 : null;
+        const fieldPath = location.slice(2).join('.') || location.slice(1).join('.');
+        const prefix = rowIndex ? `Row ${rowIndex} ${fieldPath}` : fieldPath || 'Request';
+        return `${prefix}: ${item.msg || 'Invalid value'}`;
+      });
+    }
+    if (typeof detail === 'object') {
+      if (detail.message) {
+        return [detail.message];
+      }
+      if (detail.code) {
+        return [formatErrorMessage(detail)];
+      }
+    }
+    if (typeof detail === 'string') {
+      return [detail];
+    }
+    return ['Validation failed'];
+  };
+
   // 执行命令
   const run = async () => {
     if (!hotRef.current) {
@@ -465,16 +535,65 @@ export default function App() {
       return;
     }
     
+    setErrorMessages([]);
+    setJumpServerErrors({});
+
+    const hotInstance = hotRef.current.hotInstance;
+    const currentArrayData = hotInstance.getData();
+    const currentColumns = hotInstance.getColHeader();
+    const currentCommands = currentColumns.slice(4);
+
     // 跳板机配置验证
+    const validationMessages = [];
+    const nextJumpServerErrors = {};
     if (useJumpServer) {
       if (!jumpServerConfig.ip.trim()) {
-        alert('Please configure jump server IP address when jump server is enabled');
-        return;
+        nextJumpServerErrors.ip = '请输入跳板机IP地址';
+        validationMessages.push('Jump server IP is required');
+      } else if (!isValidIpAddress(jumpServerConfig.ip)) {
+        nextJumpServerErrors.ip = '跳板机IP格式不正确';
+        validationMessages.push('Jump server IP format is invalid');
       }
       if (!jumpServerConfig.user.trim()) {
-        alert('Please configure jump server username when jump server is enabled');
-        return;
+        nextJumpServerErrors.user = '请输入跳板机用户名';
+        validationMessages.push('Jump server username is required');
       }
+      if (!isValidPort(jumpServerConfig.port)) {
+        nextJumpServerErrors.port = '跳板机端口范围为 1-65535';
+        validationMessages.push('Jump server port must be between 1 and 65535');
+      }
+    }
+
+    if (currentCommands.length === 0 || currentCommands.some((cmd) => !cmd || cmd.trim() === '')) {
+      validationMessages.push('Commands cannot be empty');
+    }
+
+    currentArrayData.forEach((row, idx) => {
+      const rowNumber = idx + 1;
+      const ip = String(row[0] || '').trim();
+      const user = String(row[1] || 'root').trim();
+      const password = String(row[2] || 'huawei@1234').trim();
+
+      if (!ip) {
+        validationMessages.push(`Row ${rowNumber}: IP is required`);
+      } else if (!isValidIpAddress(ip)) {
+        validationMessages.push(`Row ${rowNumber}: IP format is invalid`);
+      }
+      if (!user) {
+        validationMessages.push(`Row ${rowNumber}: username is required`);
+      }
+      if (!password) {
+        validationMessages.push(`Row ${rowNumber}: password is required`);
+      }
+      if (!isValidPort(row[3] || 22)) {
+        validationMessages.push(`Row ${rowNumber}: port must be between 1 and 65535`);
+      }
+    });
+
+    if (validationMessages.length > 0) {
+      setJumpServerErrors(nextJumpServerErrors);
+      setErrorMessages(validationMessages);
+      return;
     }
     
     setIsRunning(true);
@@ -491,18 +610,14 @@ export default function App() {
     }
     setConnectionStatus('connecting');
     setErrorMessages([]);
-    const hotInstance = hotRef.current.hotInstance;
-    const currentArrayData = hotInstance.getData();
-    const currentColumns = hotInstance.getColHeader();
-    const currentCommands = currentColumns.slice(4);
       
     // 将表格数据转换为后端所需的格式
     const rows = currentArrayData.map((row, idx) => {
       const baseData = {
-        ip: row[0] || '',
-        user: row[1] || 'root',
-        password: row[2] || 'huawei@1234',
-        port: parseInt(row[3]) || 22,
+        ip: String(row[0] || '').trim(),
+        user: String(row[1] || 'root').trim(),
+        password: String(row[2] || 'huawei@1234').trim(),
+        port: Number(row[3] || 22),
         commands: currentCommands,
         rowId: `row-${idx}`
       };
@@ -511,9 +626,9 @@ export default function App() {
       if (useJumpServer) {
         baseData.jumpServer = {
           enabled: true,
-          ip: jumpServerConfig.ip,
-          user: jumpServerConfig.user,
-          port: jumpServerConfig.port
+          ip: jumpServerConfig.ip.trim(),
+          user: jumpServerConfig.user.trim(),
+          port: Number(jumpServerConfig.port)
         };
       }
       
@@ -555,7 +670,7 @@ export default function App() {
           
           // 处理错误消息
           if (message.error) {
-            setErrorMessages(prevErrors => [...prevErrors, message.error]);
+            setErrorMessages(prevErrors => [...prevErrors, formatErrorMessage(message.error)]);
             return;
           }
           
@@ -661,9 +776,17 @@ export default function App() {
         };
 
       } else {
-        console.error('Failed to send commands to the backend:', await res.text());
+        let detailMessages = [];
+        try {
+          const errorText = await res.text();
+          const errorBody = errorText ? JSON.parse(errorText) : null;
+          detailMessages = formatValidationErrors(errorBody.detail);
+        } catch (error) {
+          detailMessages = ['Failed to send commands to the backend'];
+        }
+        console.error('Failed to send commands to the backend:', detailMessages.join('; '));
         setConnectionStatus('error');
-        setErrorMessages(prevErrors => [...prevErrors, 'Failed to send commands to the backend']);
+        setErrorMessages(prevErrors => [...prevErrors, ...detailMessages]);
         setIsRunning(false);
       }
     } catch (error) {
@@ -1191,7 +1314,7 @@ export default function App() {
           <span className="jump-server-label">Use Jump Server / 使用跳板机</span>
         </div>
         
-        {useJumpServer && (
+                {useJumpServer && (
           <div className="jump-server-config">
             <div className="jump-server-notice">
               <div className="notice-icon">⚠️</div>
@@ -1213,6 +1336,9 @@ export default function App() {
                   disabled={isRunning}
                   required
                 />
+                {jumpServerErrors.ip && (
+                  <span className="inline-error-message">{jumpServerErrors.ip}</span>
+                )}
               </div>
               
               <div className="input-group">
@@ -1224,6 +1350,9 @@ export default function App() {
                   placeholder="root"
                   disabled={isRunning}
                 />
+                {jumpServerErrors.user && (
+                  <span className="inline-error-message">{jumpServerErrors.user}</span>
+                )}
               </div>
               
               <div className="input-group">
@@ -1231,12 +1360,15 @@ export default function App() {
                 <input
                   type="number"
                   value={jumpServerConfig.port}
-                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, port: parseInt(e.target.value) || 22})}
+                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, port: e.target.value})}
                   placeholder="22"
                   disabled={isRunning}
                   min="1"
                   max="65535"
                 />
+                {jumpServerErrors.port && (
+                  <span className="inline-error-message">{jumpServerErrors.port}</span>
+                )}
               </div>
             </div>
           </div>
