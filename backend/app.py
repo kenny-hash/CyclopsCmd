@@ -9,7 +9,6 @@ from ipaddress import ip_address
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
 from typing import List, Dict, Any, Optional, Annotated
 import asyncssh
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
@@ -449,6 +448,17 @@ def build_error(code, message=None, detail=None):
         "detail": detail,
     }
 
+
+def normalize_validation_errors(errors):
+    normalized_errors = []
+    for error in errors:
+        normalized_error = dict(error)
+        ctx = normalized_error.get("ctx")
+        if ctx and "error" in ctx:
+            normalized_error["ctx"] = {**ctx, "error": str(ctx["error"])}
+        normalized_errors.append(normalized_error)
+    return normalized_errors
+
 def classify_ssh_error(error, context="command"):
     if isinstance(error, asyncssh.misc.PermissionDenied):
         return build_error("SSH_AUTH_FAILED", detail=str(error))
@@ -471,12 +481,10 @@ async def send_ws_error(ws: WebSocket, row_id: str, code: str, message: str, det
 async def validation_exception_handler(request, exc):
     return JSONResponse(
         status_code=422,
-        content=jsonable_encoder(
-            build_error(
-                "VALIDATION_ERROR",
-                message="Request validation failed",
-                detail=exc.errors(),
-            )
+        content=build_error(
+            "VALIDATION_ERROR",
+            message="Request validation failed",
+            detail=normalize_validation_errors(exc.errors()),
         ),
     )
 

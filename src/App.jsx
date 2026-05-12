@@ -515,11 +515,14 @@ export default function App() {
       });
     }
     if (typeof detail === 'object') {
-      if (detail.message) {
-        return [detail.message];
+      if (Array.isArray(detail.detail)) {
+        return formatValidationErrors(detail.detail);
       }
       if (detail.code) {
         return [formatErrorMessage(detail)];
+      }
+      if (detail.message) {
+        return [detail.message];
       }
     }
     if (typeof detail === 'string') {
@@ -780,7 +783,7 @@ export default function App() {
         try {
           const errorText = await res.text();
           const errorBody = errorText ? JSON.parse(errorText) : null;
-          detailMessages = formatValidationErrors(errorBody.detail);
+          detailMessages = formatValidationErrors(errorBody?.detail ?? errorBody);
         } catch (error) {
           detailMessages = ['Failed to send commands to the backend'];
         }
