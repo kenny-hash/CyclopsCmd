@@ -1,5 +1,9 @@
 # CyclopsCmd
 
+## Short Description
+
+CyclopsCmd is a web-based operations console for running SSH commands across multiple servers in batches, with real-time execution output and reusable server configurations.
+
 CyclopsCmd 是一个面向批量服务器运维的 Web 控制台。前端使用 React + Vite + Handsontable 提供表格式服务器与命令录入界面，后端使用 FastAPI + AsyncSSH 执行 SSH 命令，并通过 WebSocket 实时回传执行进度和结果。
 
 ## 功能概览
