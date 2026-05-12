@@ -2,6 +2,7 @@
   "name": "cyclops-cmd",
   "private": true,
   "version": "0.1.0",
+  "description": "Web console for running SSH commands across multiple servers in batches",
   "type": "module",
   "scripts": {
     "dev": "vite",
