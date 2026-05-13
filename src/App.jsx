@@ -3,6 +3,7 @@ import { HotTable } from '@handsontable/react';
 import 'handsontable/dist/handsontable.full.min.css';
 import Handsontable from 'handsontable';
 import { ansiToHtml } from './ansi-to-html';
+import { formatBackendError, isValidIpAddress, isValidPort } from './validation';
 import './App.css';
 
 // 注册数值类型单元格
@@ -51,27 +52,6 @@ const initialCommands = ['uname -a'];
 const desktopConfig = window.__CYCLOPS_DESKTOP_CONFIG__ || {};
 const API_BASE_URL = (desktopConfig.apiBaseUrl || import.meta.env.VITE_BACKEND_API_BASE_URL || '').replace(/\/$/, '');
 const apiUrl = (path) => `${API_BASE_URL}${path}`;
-
-const isValidIpAddress = (value) => {
-  const normalized = String(value || '').trim();
-  if (!normalized) return false;
-
-  const ipv4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const ipv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::1|::|([0-9a-fA-F]{1,4}:){1,7}:|:([0-9a-fA-F]{1,4}:){1,7}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4})$/;
-  return ipv4.test(normalized) || ipv6.test(normalized);
-};
-
-const isValidPort = (value) => Number.isInteger(value) && value >= 1 && value <= 65535;
-
-const formatBackendError = (payload) => {
-  if (payload?.error?.message) {
-    return payload.error.code ? `${payload.error.code}: ${payload.error.message}` : payload.error.message;
-  }
-  if (payload?.detail) {
-    return typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail);
-  }
-  return '请求失败，请检查输入后重试。';
-};
 
 export default function App() {
   const hotRef = useRef(null);
