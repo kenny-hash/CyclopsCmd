@@ -86,3 +86,50 @@ def test_execute_endpoint_registers_room_without_opening_ssh(client):
     body = response.json()
     assert "room" in body
     assert body["room"]
+
+
+def test_execute_rejects_invalid_ip_port_and_empty_command(client):
+    response = client.post(
+        "/api/v1/execute",
+        json=[
+            {
+                "ip": "not-an-ip",
+                "user": "root",
+                "password": "example-password",
+                "port": 70000,
+                "commands": [""],
+                "rowId": "row-1",
+            }
+        ],
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert body["error"]["message"]
+    detail_locations = [tuple(detail["loc"]) for detail in body["error"]["details"]]
+    assert ("body", 0, "ip") in detail_locations
+    assert ("body", 0, "port") in detail_locations
+    assert ("body", 0, "commands", 0) in detail_locations
+
+
+def test_execute_rejects_enabled_jump_server_without_required_fields(client):
+    response = client.post(
+        "/api/v1/execute",
+        json=[
+            {
+                "ip": "127.0.0.1",
+                "user": "root",
+                "password": "example-password",
+                "port": 22,
+                "commands": ["echo hello"],
+                "rowId": "row-1",
+                "jumpServer": {"enabled": True, "port": 22},
+            }
+        ],
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert any("Jump server IP and username" in detail["msg"] for detail in body["error"]["details"])

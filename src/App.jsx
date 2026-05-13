@@ -3,6 +3,7 @@ import { HotTable } from '@handsontable/react';
 import 'handsontable/dist/handsontable.full.min.css';
 import Handsontable from 'handsontable';
 import { ansiToHtml } from './ansi-to-html';
+import { formatBackendError, isValidIpAddress, isValidPort } from './validation';
 import './App.css';
 
 // 注册数值类型单元格
@@ -59,6 +60,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null);
   const [errorMessages, setErrorMessages] = useState([]);
+  const [validationErrors, setValidationErrors] = useState([]);
   const isDebugMode = import.meta.env.MODE === 'development';
   
   // 跳板机相关状态
@@ -471,60 +473,91 @@ export default function App() {
       return;
     }
     
-    // 跳板机配置验证
-    if (useJumpServer) {
-      if (!jumpServerConfig.ip.trim()) {
-        alert('Please configure jump server IP address when jump server is enabled');
-        return;
-      }
-      if (!jumpServerConfig.user.trim()) {
-        alert('Please configure jump server username when jump server is enabled');
-        return;
-      }
-    }
-    
-    setIsRunning(true);
-    if (hotRef.current && hotRef.current.hotInstance) {
-      const hotInstance = hotRef.current.hotInstance;
-      const rowCount = hotInstance.countRows();
-      const colCount = hotInstance.countCols();
-
-      for (let row = 0; row < rowCount; row++) {
-        for (let col = 4; col < colCount; col++) {
-          hotInstance.setDataAtCell(row, col, '');
-        }
-      }
-    }
-    setConnectionStatus('connecting');
-    setErrorMessages([]);
     const hotInstance = hotRef.current.hotInstance;
     const currentArrayData = hotInstance.getData();
     const currentColumns = hotInstance.getColHeader();
-    const currentCommands = currentColumns.slice(4);
+    const currentCommands = currentColumns.slice(4).map(command => String(command || '').trim());
+    const nextValidationErrors = [];
+
+    const normalizedJumpServer = {
+      enabled: useJumpServer,
+      ip: String(jumpServerConfig.ip || '').trim(),
+      user: String(jumpServerConfig.user || '').trim(),
+      port: Number.parseInt(jumpServerConfig.port, 10)
+    };
+
+    if (useJumpServer) {
+      if (!isValidIpAddress(normalizedJumpServer.ip)) {
+        nextValidationErrors.push('跳板机 IP 格式不正确，请输入合法的 IPv4 或 IPv6 地址。');
+      }
+      if (!normalizedJumpServer.user) {
+        nextValidationErrors.push('启用跳板机时必须填写跳板机用户名。');
+      }
+      if (!isValidPort(normalizedJumpServer.port)) {
+        nextValidationErrors.push('跳板机端口必须在 1 到 65535 之间。');
+      }
+    }
+
+    const validCommands = currentCommands.filter(command => command.length > 0);
+    if (validCommands.length === 0) {
+      nextValidationErrors.push('至少需要保留一个非空命令列。');
+    }
       
     // 将表格数据转换为后端所需的格式
     const rows = currentArrayData.map((row, idx) => {
+      const ip = String(row[0] || '').trim();
+      const user = String(row[1] || 'root').trim();
+      const password = String(row[2] || 'huawei@1234').trim();
+      const port = Number.parseInt(row[3], 10);
+
+      if (!isValidIpAddress(ip)) {
+        nextValidationErrors.push(`第 ${idx + 1} 行：IP 格式不正确，请输入合法的 IPv4 或 IPv6 地址。`);
+      }
+      if (!user) {
+        nextValidationErrors.push(`第 ${idx + 1} 行：用户名不能为空。`);
+      }
+      if (!password) {
+        nextValidationErrors.push(`第 ${idx + 1} 行：密码不能为空。`);
+      }
+      if (!isValidPort(port)) {
+        nextValidationErrors.push(`第 ${idx + 1} 行：端口必须在 1 到 65535 之间。`);
+      }
+
       const baseData = {
-        ip: row[0] || '',
-        user: row[1] || 'root',
-        password: row[2] || 'huawei@1234',
-        port: parseInt(row[3]) || 22,
-        commands: currentCommands,
+        ip,
+        user: user || 'root',
+        password: password || 'huawei@1234',
+        port: Number.isNaN(port) ? 22 : port,
+        commands: validCommands,
         rowId: `row-${idx}`
       };
       
       // 如果启用跳板机，添加跳板机配置
       if (useJumpServer) {
-        baseData.jumpServer = {
-          enabled: true,
-          ip: jumpServerConfig.ip,
-          user: jumpServerConfig.user,
-          port: jumpServerConfig.port
-        };
+        baseData.jumpServer = normalizedJumpServer;
       }
       
       return baseData;
     });
+
+    if (nextValidationErrors.length > 0) {
+      setValidationErrors(nextValidationErrors);
+      setConnectionStatus('error');
+      return;
+    }
+
+    setValidationErrors([]);
+    setIsRunning(true);
+    const rowCount = hotInstance.countRows();
+    const colCount = hotInstance.countCols();
+
+    for (let row = 0; row < rowCount; row++) {
+      for (let col = 4; col < colCount; col++) {
+        hotInstance.setDataAtCell(row, col, '');
+      }
+    }
+    setConnectionStatus('connecting');
+    setErrorMessages([]);
 
     try {
       const res = await fetch(apiUrl('/api/v1/execute'), {
@@ -561,7 +594,9 @@ export default function App() {
           
           // 处理错误消息
           if (message.error) {
-            setErrorMessages(prevErrors => [...prevErrors, message.error]);
+            const errorText = message.errorMessage || message.error.message || message.error;
+            const formattedError = message.errorCode ? `${message.errorCode}: ${errorText}` : errorText;
+            setErrorMessages(prevErrors => [...prevErrors, formattedError]);
             return;
           }
           
@@ -667,9 +702,17 @@ export default function App() {
         };
 
       } else {
-        console.error('Failed to send commands to the backend:', await res.text());
+        const rawBody = await res.text();
+        let parsedBody = null;
+        try {
+          parsedBody = rawBody ? JSON.parse(rawBody) : null;
+        } catch (parseError) {
+          console.error('Error parsing backend error response:', parseError);
+        }
+        const backendError = formatBackendError(parsedBody) || rawBody || 'Failed to send commands to the backend';
+        console.error('Failed to send commands to the backend:', backendError);
         setConnectionStatus('error');
-        setErrorMessages(prevErrors => [...prevErrors, 'Failed to send commands to the backend']);
+        setValidationErrors([backendError]);
         setIsRunning(false);
       }
     } catch (error) {
@@ -866,6 +909,7 @@ export default function App() {
         const arrayData = hotInstance.getData();
         const updatedObjectData = convertToObject(arrayData, headers);
         setObjectData(updatedObjectData);
+        setValidationErrors([]);
       }
     },
     
@@ -1079,6 +1123,7 @@ export default function App() {
         
         const updatedObjectData = convertToObject(arrayData, headers);
         setObjectData(updatedObjectData);
+        setValidationErrors([]);
       }
     },
     
@@ -1214,7 +1259,7 @@ export default function App() {
                 <input
                   type="text"
                   value={jumpServerConfig.ip}
-                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, ip: e.target.value})}
+                  onChange={(e) => { setJumpServerConfig({...jumpServerConfig, ip: e.target.value}); setValidationErrors([]); }}
                   placeholder="Enter jump server IP address"
                   disabled={isRunning}
                   required
@@ -1226,7 +1271,7 @@ export default function App() {
                 <input
                   type="text"
                   value={jumpServerConfig.user}
-                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, user: e.target.value})}
+                  onChange={(e) => { setJumpServerConfig({...jumpServerConfig, user: e.target.value}); setValidationErrors([]); }}
                   placeholder="root"
                   disabled={isRunning}
                 />
@@ -1237,7 +1282,7 @@ export default function App() {
                 <input
                   type="number"
                   value={jumpServerConfig.port}
-                  onChange={(e) => setJumpServerConfig({...jumpServerConfig, port: parseInt(e.target.value) || 22})}
+                  onChange={(e) => { setJumpServerConfig({...jumpServerConfig, port: parseInt(e.target.value) || 22}); setValidationErrors([]); }}
                   placeholder="22"
                   disabled={isRunning}
                   min="1"
@@ -1343,6 +1388,28 @@ export default function App() {
             </div>
           )}
           
+          {validationErrors.length > 0 && (
+            <div className="validation-errors-container" role="alert">
+              <div className="error-messages-header">
+                <span>校验提示 ({validationErrors.length})</span>
+                <button
+                  className="clear-errors-btn"
+                  onClick={() => setValidationErrors([])}
+                  title="清除所有校验提示"
+                >
+                  清除
+                </button>
+              </div>
+              <div className="error-messages-list">
+                {validationErrors.map((msg, index) => (
+                  <div key={index} className="validation-error-item">
+                    {msg}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {errorMessages.length > 0 && (
             <div className="error-messages-container">
               <div className="error-messages-header">
