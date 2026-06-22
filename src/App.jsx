@@ -79,6 +79,38 @@ export default function App() {
   const [configLoading, setConfigLoading] = useState(false);
   const fileInputRef = useRef(null);
 
+  const updateCommandHeader = (hotInstance, colIndex, newHeader) => {
+    const currentHeader = hotInstance.getColHeader(colIndex);
+
+    if (!newHeader || newHeader === currentHeader || newHeader.trim() === '') {
+      return;
+    }
+
+    const headers = [...hotInstance.getColHeader()];
+    headers[colIndex] = newHeader.trim();
+
+    hotInstance.updateSettings({
+      colHeaders: headers
+    });
+
+    const newCommands = headers.slice(4);
+    setCommands(newCommands);
+
+    const arrayData = hotInstance.getData();
+    const updatedObjectData = convertToObject(arrayData, headers);
+    setObjectData(updatedObjectData);
+  };
+
+  const editCommandHeader = (hotInstance, colIndex) => {
+    if (!hotInstance || colIndex < 4) {
+      return;
+    }
+
+    const currentHeader = hotInstance.getColHeader(colIndex);
+    const newHeader = prompt("编辑命令:", currentHeader);
+    updateCommandHeader(hotInstance, colIndex, newHeader);
+  };
+
   // 将对象数据转换为数组数据用于表格
   const data = convertToArray(objectData, commands);
 
@@ -111,37 +143,10 @@ export default function App() {
             // 计算实际列索引 (去除行标题的偏移)
             const colIndex = index - 1;
             
-            // 获取当前列标题
-            const currentHeader = hotInstance.getColHeader(colIndex);
-            
-            // 弹出编辑对话框
-            const newHeader = prompt("编辑命令:", currentHeader);
-            
-            // 如果用户输入了新名称且不为空
-            if (newHeader && newHeader !== currentHeader && newHeader.trim() !== '') {
-              try {
-                // 获取所有列标题
-                const headers = [...hotInstance.getColHeader()];
-                
-                // 更新特定列的标题
-                headers[colIndex] = newHeader;
-                
-                // 应用到表格
-                hotInstance.updateSettings({
-                  colHeaders: headers
-                });
-                
-                // 更新 React 状态
-                const newCommands = headers.slice(4);
-                setCommands(newCommands);
-                
-                // 更新对象数据
-                const arrayData = hotInstance.getData();
-                const updatedObjectData = convertToObject(arrayData, headers);
-                setObjectData(updatedObjectData);
-              } catch (error) {
-                console.error("更新表头时出错:", error);
-              }
+            try {
+              editCommandHeader(hotInstance, colIndex);
+            } catch (error) {
+              console.error("更新表头时出错:", error);
             }
           };
         }
@@ -798,29 +803,7 @@ export default function App() {
     if (!hotRef.current || index < 4) return;
     
     const hotInstance = hotRef.current.hotInstance;
-    const currentHeader = hotInstance.getColHeader(index);
-    
-    // 弹出编辑对话框
-    const newHeader = prompt("Edit command:", currentHeader);
-    if (newHeader && newHeader !== currentHeader && newHeader.trim() !== '') {
-      // 更新表头
-      const headers = [...hotInstance.getColHeader()];
-      headers[index] = newHeader;
-      
-      // 更新表格设置
-      hotInstance.updateSettings({
-        colHeaders: headers
-      });
-      
-      // 更新命令列表
-      const newCommands = headers.slice(4);
-      setCommands(newCommands);
-      
-      // 更新对象数据
-      const arrayData = hotInstance.getData();
-      const updatedObjectData = convertToObject(arrayData, headers);
-      setObjectData(updatedObjectData);
-    }
+    editCommandHeader(hotInstance, index);
   };
 
   // 监听命令列表变化，更新列配置
@@ -911,6 +894,21 @@ export default function App() {
         setObjectData(updatedObjectData);
         setValidationErrors([]);
       }
+    },
+
+    // 通过 Handsontable 原生钩子处理表头双击。打包到 Electron/Windows 后，
+    // 表头 DOM 可能会在渲染、滚动或列调整时被克隆/替换，直接绑定 DOM ondblclick
+    // 容易失效；使用坐标钩子可以稳定识别命令列表头。
+    afterOnCellMouseDown: (event, coords) => {
+      if (coords.row !== -1 || coords.col < 4 || event.detail !== 2) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const hotInstance = hotRef.current?.hotInstance;
+      editCommandHeader(hotInstance, coords.col);
     },
     
     // 使用Handsontable内置的右键菜单功能
