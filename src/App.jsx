@@ -112,7 +112,6 @@ export default function App() {
     }
 
     const currentHeader = hotInstance.getColHeader(colIndex);
-    console.info(`[command-header] open editor col=${colIndex} header=${currentHeader}`);
     setCommandEditor({
       isOpen: true,
       colIndex,
@@ -167,7 +166,7 @@ export default function App() {
             // 阻止事件冒泡
             e.preventDefault();
             e.stopPropagation();
-            
+
             try {
               editCommandHeader(hotInstance, colIndex);
             } catch (error) {
