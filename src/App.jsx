@@ -77,6 +77,11 @@ export default function App() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [configLoading, setConfigLoading] = useState(false);
+  const [commandEditor, setCommandEditor] = useState({
+    isOpen: false,
+    colIndex: null,
+    value: ''
+  });
   const fileInputRef = useRef(null);
 
   const updateCommandHeader = (hotInstance, colIndex, newHeader) => {
@@ -107,8 +112,29 @@ export default function App() {
     }
 
     const currentHeader = hotInstance.getColHeader(colIndex);
-    const newHeader = prompt("编辑命令:", currentHeader);
-    updateCommandHeader(hotInstance, colIndex, newHeader);
+    setCommandEditor({
+      isOpen: true,
+      colIndex,
+      value: currentHeader
+    });
+  };
+
+  const closeCommandEditor = () => {
+    setCommandEditor({
+      isOpen: false,
+      colIndex: null,
+      value: ''
+    });
+  };
+
+  const saveCommandHeader = () => {
+    const hotInstance = hotRef.current?.hotInstance;
+
+    if (hotInstance && commandEditor.colIndex !== null) {
+      updateCommandHeader(hotInstance, commandEditor.colIndex, commandEditor.value);
+    }
+
+    closeCommandEditor();
   };
 
   // 将对象数据转换为数组数据用于表格
@@ -122,14 +148,15 @@ export default function App() {
     try {
       const hotInstance = hotRef.current.hotInstance;
       
-      // 找到表头行中的所有单元格
-      const headerElements = hotInstance.rootElement.querySelectorAll('.ht_clone_top .htCore thead th');
+      // 找到所有克隆层中的表头单元格。Windows/Electron 打包后 Handsontable
+      // 可能不会只使用 .ht_clone_top，限制在单个克隆层会漏绑事件。
+      const headerElements = hotInstance.rootElement.querySelectorAll('.htCore thead th[data-command-col]');
       
       // 为每个表头单元格添加双击事件
-      headerElements.forEach((th, index) => {
-        // 跳过行标题和基本信息列（IP, User, Password, Port）
-        // 表头索引比实际列索引大1（因为第一列是行标题）
-        if (index > 0 && index >= 5) { // 第5个是第一个命令列（索引从0开始）
+      headerElements.forEach((th) => {
+        const colIndex = Number(th.dataset.commandCol);
+
+        if (Number.isInteger(colIndex) && colIndex >= 4) {
           // 添加视觉提示
           th.style.cursor = 'pointer';
           th.title = '双击编辑命令';
@@ -139,10 +166,7 @@ export default function App() {
             // 阻止事件冒泡
             e.preventDefault();
             e.stopPropagation();
-            
-            // 计算实际列索引 (去除行标题的偏移)
-            const colIndex = index - 1;
-            
+
             try {
               editCommandHeader(hotInstance, colIndex);
             } catch (error) {
@@ -910,6 +934,30 @@ export default function App() {
       const hotInstance = hotRef.current?.hotInstance;
       editCommandHeader(hotInstance, coords.col);
     },
+
+    // 每次 Handsontable 生成表头时标记命令列，并直接绑定双击事件。
+    // 这比手动 query 某个克隆层更可靠，能够覆盖 Electron/Windows 打包后
+    // 表头被虚拟化、重建或放入不同 clone 容器的情况。
+    afterGetColHeader: (col, TH) => {
+      if (col < 4) {
+        TH.removeAttribute('data-command-col');
+        TH.removeAttribute('title');
+        TH.style.cursor = '';
+        TH.ondblclick = null;
+        return;
+      }
+
+      TH.dataset.commandCol = String(col);
+      TH.title = '双击编辑命令';
+      TH.style.cursor = 'pointer';
+      TH.ondblclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const hotInstance = hotRef.current?.hotInstance;
+        editCommandHeader(hotInstance, col);
+      };
+    },
     
     // 使用Handsontable内置的右键菜单功能
     contextMenu: {
@@ -970,7 +1018,9 @@ export default function App() {
             
             const updatedObjectData = convertToObject(newData, currentHeaders);
             setObjectData(updatedObjectData);
-          },
+          }
+        },
+        'col_right': {
           name: 'Insert command column right',
           disabled: function() {
             const selected = this.getSelected();
@@ -1463,6 +1513,45 @@ export default function App() {
               >
                 {configLoading ? 'Saving...' : 'Save'}
                 {configLoading && <span className="loading"></span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 命令表头编辑模态窗口：避免依赖 Electron 中不稳定的 window.prompt */}
+      {commandEditor.isOpen && (
+        <div className="modal">
+          <div className="modal-content">
+            <h3>编辑命令</h3>
+            <input
+              type="text"
+              value={commandEditor.value}
+              onChange={(e) => setCommandEditor(prev => ({ ...prev, value: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  saveCommandHeader();
+                }
+
+                if (e.key === 'Escape') {
+                  closeCommandEditor();
+                }
+              }}
+              autoFocus
+            />
+            <div className="modal-buttons">
+              <button
+                onClick={closeCommandEditor}
+                className="button-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveCommandHeader}
+                className="button-save"
+                disabled={!commandEditor.value.trim()}
+              >
+                Save
               </button>
             </div>
           </div>
