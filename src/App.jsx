@@ -775,7 +775,7 @@ export default function App() {
   };
 
   // 添加新命令列
-  const addCommandColumn = (index, commandName) => {
+  const addCommandColumn = (index, commandName, { editAfterInsert = false } = {}) => {
     if (!hotRef.current) return;
     
     const hotInstance = hotRef.current.hotInstance;
@@ -807,6 +807,10 @@ export default function App() {
     // 更新对象数据
     const updatedObjectData = convertToObject(newData, currentHeaders);
     setObjectData(updatedObjectData);
+
+    if (editAfterInsert) {
+      setTimeout(() => editCommandHeader(hotInstance, index), 0);
+    }
   };
 
   // 删除命令列
@@ -861,7 +865,7 @@ export default function App() {
         { type: 'text' },   // User
         { type: 'text' }, // Password
         { type: 'numeric' }, // Port
-        ...commands.map(() => ({ type: 'text', copyable: true, readOnly: false })) // 命令输出列
+        ...commands.map(() => ({ type: 'text', copyable: true, readOnly: true })) // 命令输出列
       ];
       
       hotInstance.updateSettings({ columns });
@@ -903,7 +907,7 @@ export default function App() {
       { type: 'text' },   // User
       { type: 'text' }, // Password
       { type: 'numeric' }, // Port
-      ...commands.map(() => ({ type: 'text'})) // 命令输出列
+      ...commands.map(() => ({ type: 'text', readOnly: true })) // 命令输出列
     ],
     
     // 控制哪些列可以重命名
@@ -1011,35 +1015,9 @@ export default function App() {
             
             const [, firstCol] = selected[0];
             
-            // 生成临时命令名
+            // 生成临时命令名，并立即打开表头编辑器，避免用户把命令误填到输出单元格。
             const tempCommandName = `command_${Math.floor(Math.random() * 10000)}`;
-            
-            // 使用更新后的方法手动实现列插入
-            const currentData = this.getData();
-            const currentHeaders = [...this.getColHeader()];
-            
-            // 向所有行插入空数据
-            const newData = currentData.map(row => {
-              const newRow = [...row];
-              newRow.splice(firstCol, 0, '');  // 在指定位置插入空字符串
-              return newRow;
-            });
-            
-            // 更新表头
-            currentHeaders.splice(firstCol, 0, tempCommandName);
-            
-            // 更新表格
-            this.updateSettings({
-              data: newData,
-              colHeaders: currentHeaders
-            });
-            
-            // 更新React状态
-            const newCommands = currentHeaders.slice(4);
-            setCommands(newCommands);
-            
-            const updatedObjectData = convertToObject(newData, currentHeaders);
-            setObjectData(updatedObjectData);
+            addCommandColumn(firstCol, tempCommandName, { editAfterInsert: true });
           }
         },
         'col_right': {
@@ -1059,35 +1037,9 @@ export default function App() {
             
             const [, firstCol] = selected[0];
             
-            // 生成临时命令名
+            // 生成临时命令名，并立即打开表头编辑器，避免用户把命令误填到输出单元格。
             const tempCommandName = `command_${Math.floor(Math.random() * 10000)}`;
-            
-            // 使用更新后的方法手动实现列插入
-            const currentData = this.getData();
-            const currentHeaders = [...this.getColHeader()];
-            
-            // 向所有行插入空数据
-            const newData = currentData.map(row => {
-              const newRow = [...row];
-              newRow.splice(firstCol + 1, 0, '');  // 在指定位置插入空字符串
-              return newRow;
-            });
-            
-            // 更新表头
-            currentHeaders.splice(firstCol + 1, 0, tempCommandName);
-            
-            // 更新表格
-            this.updateSettings({
-              data: newData,
-              colHeaders: currentHeaders
-            });
-            
-            // 更新React状态
-            const newCommands = currentHeaders.slice(4);
-            setCommands(newCommands);
-            
-            const updatedObjectData = convertToObject(newData, currentHeaders);
-            setObjectData(updatedObjectData);
+            addCommandColumn(firstCol + 1, tempCommandName, { editAfterInsert: true });
           }
         },
         'separator2': '---------',
