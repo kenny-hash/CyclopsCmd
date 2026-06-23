@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -35,6 +35,36 @@ function appendLog(level, message) {
 
 function isDebugEnabled() {
   return !app.isPackaged || process.env.CYCLOPSCMD_DEBUG === '1';
+}
+
+function defaultLogExportPath() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(app.getPath('downloads'), `cyclopscmd-debug-logs-${stamp}.log`);
+}
+
+async function exportDebugLogs() {
+  const sourcePath = ensureLogFile();
+  appendLog('INFO', 'Debug log export requested');
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Export CyclopsCmd Debug Logs',
+    defaultPath: defaultLogExportPath(),
+    buttonLabel: 'Export Logs',
+    filters: [
+      { name: 'Log Files', extensions: ['log'] },
+      { name: 'Text Files', extensions: ['txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (canceled || !filePath) {
+    appendLog('INFO', 'Debug log export canceled');
+    return { canceled: true };
+  }
+
+  await fs.promises.copyFile(sourcePath, filePath);
+  appendLog('INFO', `Debug logs exported to ${filePath}`);
+  return { canceled: false, filePath };
 }
 
 function projectRoot() {
@@ -231,6 +261,8 @@ function stopBackend() {
 
   child.kill('SIGTERM');
 }
+
+ipcMain.handle('cyclopscmd-export-debug-logs', async () => exportDebugLogs());
 
 app.whenReady()
   .then(startBackend)
