@@ -773,6 +773,14 @@ input:disabled + .slider:before {
   background-color: hsl(240 5.9% 96%);
 }
 
+.dropdown-action-item-disabled {
+  color: hsl(240 3.8% 46.1%);
+}
+
+.dropdown-action-item-disabled:hover {
+  background-color: hsl(240 5.9% 98%);
+}
+
 .dropdown-action-item svg {
   margin-right: 0.5rem;
   color: hsl(240 3.8% 46.1%);

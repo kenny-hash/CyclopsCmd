@@ -1,4 +1,4 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 function readArg(name) {
   const prefix = `--${name}=`;
@@ -12,4 +12,5 @@ const backendHost = readArg('cyclopscmd-backend-host') || '127.0.0.1';
 contextBridge.exposeInMainWorld('__CYCLOPS_DESKTOP_CONFIG__', {
   apiBaseUrl: backendPort ? `http://${backendHost}:${backendPort}` : '',
   wsBaseUrl: backendPort ? `ws://${backendHost}:${backendPort}` : '',
+  exportDebugLogs: () => ipcRenderer.invoke('cyclopscmd-export-debug-logs'),
 });
