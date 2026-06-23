@@ -83,6 +83,7 @@ export default function App() {
     colIndex: null,
     value: ''
   });
+  const [showOperationGuide, setShowOperationGuide] = useState(false);
   const fileInputRef = useRef(null);
 
   const updateCommandHeader = (hotInstance, colIndex, newHeader) => {
@@ -1245,6 +1246,15 @@ export default function App() {
           </p>
           <p className="description">
             跨多个服务器执行和监控命令。双击命令标题以对其进行编辑。右键单击表可执行更多操作。
+            <button
+              type="button"
+              className="guide-help-button"
+              onClick={() => setShowOperationGuide(true)}
+              aria-label="查看表格操作指引"
+              title="查看表格操作指引"
+            >
+              ?
+            </button>
           </p>
         </div>
       </div>
@@ -1317,15 +1327,6 @@ export default function App() {
       </div>
       
       <div className="button-group">
-        <button 
-          onClick={run} 
-          className={`button primary-button ${isRunning ? 'disabled' : ''}`}
-          disabled={isRunning}
-        >
-          {isRunning ? 'Running Commands' : 'Run Commands'}
-          {isRunning && <span className="loading"></span>}
-        </button>
-        
         <button 
           onClick={openSaveConfigModal} 
           className="button secondary-button"
@@ -1415,6 +1416,15 @@ export default function App() {
           )}
         </div>
         
+        <button 
+          onClick={run} 
+          className={`button primary-button run-command-button ${isRunning ? 'disabled' : ''}`}
+          disabled={isRunning}
+        >
+          {isRunning ? 'Running Commands' : 'Run Commands'}
+          {isRunning && <span className="loading"></span>}
+        </button>
+
         <div className="status-and-errors">
           {connectionStatus && (
             <div className={`status-indicator status-${connectionStatus}`}>
@@ -1476,6 +1486,49 @@ export default function App() {
         <HotTable ref={hotRef} {...hotSettings} />
       </div>
       
+
+      {/* 表格操作指引模态窗口 */}
+      {showOperationGuide && (
+        <div className="modal" onClick={() => setShowOperationGuide(false)}>
+          <div className="modal-content guide-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="guide-modal-header">
+              <h3>表格操作指引</h3>
+              <button
+                type="button"
+                className="guide-close-button"
+                onClick={() => setShowOperationGuide(false)}
+                aria-label="关闭表格操作指引"
+              >
+                ×
+              </button>
+            </div>
+            <div className="guide-illustration" role="img" aria-label="右键表格后可插入行、插入命令列、删除行列、清空列和重命名命令的操作示意图">
+              <div className="guide-table-preview">
+                <div className="guide-table-header">IP</div>
+                <div className="guide-table-header">User</div>
+                <div className="guide-table-header guide-command-header">uname -a</div>
+                <div className="guide-table-cell">192.168.1.10</div>
+                <div className="guide-table-cell">root</div>
+                <div className="guide-table-cell">右键此处</div>
+              </div>
+              <div className="guide-cursor">↖</div>
+              <div className="guide-context-menu">
+                <div>Insert row above</div>
+                <div>Insert command column right</div>
+                <div>Remove command column</div>
+                <div>Clear column</div>
+                <div>Rename command</div>
+              </div>
+            </div>
+            <ul className="guide-tips">
+              <li>右键单击表格单元格，可打开更多操作菜单。</li>
+              <li>在命令列中右键，可插入、删除、清空或重命名命令列。</li>
+              <li>双击命令表头，也可以快速编辑命令名称。</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* 保存配置模态窗口 */}
       {showConfigModal && (
         <div className="modal">
