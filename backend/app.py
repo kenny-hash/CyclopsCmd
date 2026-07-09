@@ -138,6 +138,8 @@ async def http_exception_handler(request, exc):
 # SSH连接池
 ssh_connections = {}
 jump_server_connections = {}  # 跳板机连接池
+jump_server_connection_keys = {}  # id(conn) -> 跳板机连接池key
+jump_server_tunnel_locks = {}  # 跳板机隧道创建锁，避免受限堡垒机并发开通道失败
 
 ERROR_MESSAGES = {
     "VALIDATION_ERROR": "请求参数校验失败，请修正后重试。",
@@ -208,35 +210,42 @@ def classify_command_error(exc: Exception) -> Dict[str, str]:
         return classify_ssh_error(exc)
     return error_payload("COMMAND_EXECUTION_FAILED")
 
+
+def credential_fingerprint(secret: Optional[str]) -> str:
+    """Return a short, non-reversible fingerprint for cache isolation."""
+    return hashlib.sha256((secret or "").encode("utf-8")).hexdigest()[:12]
+
+
+def build_jump_connection_key(jump_host, jump_username, jump_password=None, jump_port=22):
+    normalized_host = str(jump_host).replace(" ", "")
+    auth_fingerprint = credential_fingerprint(jump_password)
+    return f"jump_{normalized_host}:{jump_port}:{jump_username}:{auth_fingerprint}"
+
+
+def build_via_jump_connection_key(host, username, password, port, jump_key):
+    normalized_host = str(host).replace(" ", "")
+    auth_fingerprint = credential_fingerprint(password)
+    return f"via_jump_{jump_key}->{normalized_host}:{port}:{username}:{auth_fingerprint}"
+
+
 async def get_jump_server_connection(jump_host, jump_username, jump_password=None, jump_port=22):
     """获取跳板机SSH连接或创建新连接"""
-    jump_host = jump_host.replace(" ", "")
-    auth_fingerprint = hashlib.sha256((jump_password or "").encode("utf-8")).hexdigest()[:12]
-    key = f"jump_{jump_host}:{jump_port}:{jump_username}:{auth_fingerprint}"
+    jump_host = str(jump_host).replace(" ", "")
+    key = build_jump_connection_key(jump_host, jump_username, jump_password, jump_port)
     
     # 检查是否有可用的缓存连接
     if key in jump_server_connections:
         try:
-            # 尝试执行一个简单的命令来验证连接是否活跃
             conn = jump_server_connections[key]["conn"]
-            
-            # 实际测试连接是否有效
-            try:
-                # 使用较短的超时时间来测试连接
-                test_proc = await asyncio.wait_for(
-                    conn.create_process("echo jump_connection_test"),
-                    timeout=10
-                )
-                test_result = await test_proc.wait()
-                
-                # 连接有效，更新最后使用时间
-                jump_server_connections[key]["last_used"] = time.time()
-                logger.debug(f"Reusing jump server SSH connection to {jump_host}:{jump_port}")
-                return conn
-            except Exception as e:
-                # 测试命令失败，连接可能已断开
-                logger.warning(f"Jump server SSH connection test failed: {e}")
-                raise  # 继续处理异常
+            # 不再通过 create_process() 做健康检查：部分堡垒机 MaxSessions/通道限制很低，
+            # 额外打开 session 会与后续 direct-tcpip 隧道抢占通道并触发 ChannelOpenError。
+            if conn.is_closed():
+                raise asyncssh.misc.ConnectionLost("Cached jump server connection is closed")
+
+            jump_server_connections[key]["last_used"] = time.time()
+            jump_server_connection_keys[id(conn)] = key
+            logger.debug(f"Reusing jump server SSH connection to {jump_host}:{jump_port}")
+            return conn
                 
         except Exception as e:
             # 连接可能已关闭或失效，记录日志并从池中移除
@@ -244,10 +253,13 @@ async def get_jump_server_connection(jump_host, jump_username, jump_password=Non
             try:
                 if key in jump_server_connections:
                     try:
-                        jump_server_connections[key]["conn"].close()
+                        cached_conn = jump_server_connections[key]["conn"]
+                        jump_server_connection_keys.pop(id(cached_conn), None)
+                        cached_conn.close()
                     except:
                         pass
                     del jump_server_connections[key]
+                    jump_server_tunnel_locks.pop(key, None)
             except Exception:
                 pass
     
@@ -271,6 +283,8 @@ async def get_jump_server_connection(jump_host, jump_username, jump_password=Non
             "conn": conn,
             "last_used": time.time()
         }
+        jump_server_connection_keys[id(conn)] = key
+        jump_server_tunnel_locks.setdefault(key, asyncio.Lock())
         logger.info(f"Created new jump server SSH connection to {jump_host}:{jump_port}")
         return conn
     except asyncssh.misc.DisconnectError as e:
@@ -288,8 +302,9 @@ async def get_jump_server_connection(jump_host, jump_username, jump_password=Non
 
 async def get_ssh_connection_via_jump(host, username, password, port, jump_conn):
     """通过跳板机连接到目标服务器"""
-    host = host.replace(" ", "")
-    key = f"via_jump_{host}:{port}:{username}"
+    host = str(host).replace(" ", "")
+    jump_key = jump_server_connection_keys.get(id(jump_conn), f"jump_unknown_{id(jump_conn)}")
+    key = build_via_jump_connection_key(host, username, password, port, jump_key)
     
     # 检查是否有可用的缓存连接
     if key in ssh_connections:
@@ -325,18 +340,21 @@ async def get_ssh_connection_via_jump(host, username, password, port, jump_conn)
     
     # 通过跳板机创建新连接
     try:
-        # 使用跳板机连接创建到目标服务器的连接
-        conn = await asyncssh.connect(
-            host,
-            username=username,
-            password=password,
-            port=port,
-            known_hosts=None,
-            connect_timeout=30,
-            keepalive_interval=60,
-            login_timeout=30,
-            tunnel=jump_conn  # 使用跳板机连接作为隧道
-        )
+        # 使用跳板机连接创建到目标服务器的连接。对同一个跳板机串行创建隧道，
+        # 避免受限堡垒机在并发 direct-tcpip 打开时返回 ChannelOpenError。
+        tunnel_lock = jump_server_tunnel_locks.setdefault(jump_key, asyncio.Lock())
+        async with tunnel_lock:
+            conn = await asyncssh.connect(
+                host,
+                username=username,
+                password=password,
+                port=port,
+                known_hosts=None,
+                connect_timeout=30,
+                keepalive_interval=60,
+                login_timeout=30,
+                tunnel=jump_conn  # 使用跳板机连接作为隧道
+            )
         ssh_connections[key] = {
             "conn": conn,
             "last_used": time.time()
@@ -484,11 +502,13 @@ async def cleanup_connections():
                 
                 if current_time - data["last_used"] > 300:  # 5分钟未使用
                     try:
+                        jump_server_connection_keys.pop(id(data["conn"]), None)
                         data["conn"].close()
                     except Exception as e:
                         logger.error(f"Error closing jump server connection: {e}")
                     
                     del jump_server_connections[key]
+                    jump_server_tunnel_locks.pop(key, None)
                     cleaned += 1
                     logger.debug(f"Cleaned idle jump server connection to {host}")
                 

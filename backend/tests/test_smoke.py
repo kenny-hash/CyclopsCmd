@@ -161,3 +161,30 @@ def test_execute_accepts_enabled_jump_server_with_password(client):
     body = response.json()
     assert "room" in body
     assert body["room"]
+
+
+def test_jump_connection_key_includes_password_fingerprint(client):
+    import app as app_module
+
+    first = app_module.build_jump_connection_key("192.0.2.10", "jump-user", "first-password", 22)
+    second = app_module.build_jump_connection_key("192.0.2.10", "jump-user", "second-password", 22)
+
+    assert first != second
+    assert "first-password" not in first
+    assert "second-password" not in second
+
+
+def test_via_jump_connection_key_isolated_by_jump_and_target_password(client):
+    import app as app_module
+
+    jump_a = app_module.build_jump_connection_key("192.0.2.10", "jump-user", "jump-a", 22)
+    jump_b = app_module.build_jump_connection_key("192.0.2.11", "jump-user", "jump-b", 22)
+
+    via_a = app_module.build_via_jump_connection_key("10.0.0.5", "root", "target-a", 22, jump_a)
+    via_b = app_module.build_via_jump_connection_key("10.0.0.5", "root", "target-a", 22, jump_b)
+    via_c = app_module.build_via_jump_connection_key("10.0.0.5", "root", "target-b", 22, jump_a)
+
+    assert via_a != via_b
+    assert via_a != via_c
+    assert "target-a" not in via_a
+    assert "jump-a" not in via_a
