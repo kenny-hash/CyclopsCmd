@@ -5,6 +5,7 @@ import json
 import datetime
 import time
 import traceback
+import hashlib
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -207,10 +208,11 @@ def classify_command_error(exc: Exception) -> Dict[str, str]:
         return classify_ssh_error(exc)
     return error_payload("COMMAND_EXECUTION_FAILED")
 
-async def get_jump_server_connection(jump_host, jump_username, jump_port=22):
+async def get_jump_server_connection(jump_host, jump_username, jump_password=None, jump_port=22):
     """获取跳板机SSH连接或创建新连接"""
     jump_host = jump_host.replace(" ", "")
-    key = f"jump_{jump_host}:{jump_port}:{jump_username}"
+    auth_fingerprint = hashlib.sha256((jump_password or "").encode("utf-8")).hexdigest()[:12]
+    key = f"jump_{jump_host}:{jump_port}:{jump_username}:{auth_fingerprint}"
     
     # 检查是否有可用的缓存连接
     if key in jump_server_connections:
@@ -251,17 +253,18 @@ async def get_jump_server_connection(jump_host, jump_username, jump_port=22):
     
     # 创建新的跳板机连接
     try:
-        # 使用密钥认证连接跳板机
+        # Prefer password authentication when a jump-server password is provided;
+        # otherwise keep the original key-based behavior for existing deployments.
         conn = await asyncssh.connect(
-            jump_host, 
-            username=jump_username, 
-            port=jump_port, 
+            jump_host,
+            username=jump_username,
+            password=jump_password or None,
+            port=jump_port,
             known_hosts=None,
             connect_timeout=30,
             keepalive_interval=60,
             login_timeout=30,
-            # 跳板机使用密钥认证，不提供密码
-            client_keys='~/.ssh/id_ed25519',  # 使用默认密钥位置 (~/.ssh/id_rsa, ~/.ssh/id_ed25519, etc.)
+            client_keys=None if jump_password else '~/.ssh/id_ed25519',
             passphrase=None
         )
         jump_server_connections[key] = {
@@ -277,8 +280,8 @@ async def get_jump_server_connection(jump_host, jump_username, jump_port=22):
         logger.error(f"Jump server SSH connection lost: {e}", exc_info=True)
         raise
     except asyncssh.misc.PermissionDenied as e:
-        logger.error(f"Jump server SSH permission denied (check SSH key setup): {e}", exc_info=True)
-        raise Exception(f"Jump server authentication failed. Please ensure SSH key authentication is configured: {e}")
+        logger.error(f"Jump server SSH permission denied: {e}", exc_info=True)
+        raise Exception(f"Jump server authentication failed. Please check the jump server username/password or SSH key configuration: {e}")
     except Exception as e:
         logger.error(f"Error creating jump server SSH connection to {jump_host}:{jump_port}: {e}", exc_info=True)
         raise
@@ -529,11 +532,12 @@ class JumpServerConfig(BaseModel):
     ip: Optional[IPvAnyAddress] = None
     user: Optional[NonEmptyStr] = None
     port: PortNumber = 22
+    password: Optional[NonEmptyStr] = None
 
     @model_validator(mode="after")
     def require_jump_fields_when_enabled(self):
-        if self.enabled and (self.ip is None or self.user is None):
-            raise ValueError("Jump server IP and username are required when jump server is enabled")
+        if self.enabled and (self.ip is None or self.user is None or self.password is None):
+            raise ValueError("Jump server IP, username and password are required when jump server is enabled")
         return self
 
     @field_validator("ip")
@@ -620,7 +624,8 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                     
                     jump_conn = await get_jump_server_connection(
                         row.jumpServer.ip, 
-                        row.jumpServer.user, 
+                        row.jumpServer.user,
+                        row.jumpServer.password,
                         row.jumpServer.port
                     )
                     
@@ -802,7 +807,8 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                                             # 跳板机连接也失效了，重新连接
                                             jump_conn = await get_jump_server_connection(
                                                 row.jumpServer.ip, 
-                                                row.jumpServer.user, 
+                                                row.jumpServer.user,
+                                                row.jumpServer.password,
                                                 row.jumpServer.port
                                             )
                                     
@@ -962,6 +968,8 @@ async def execute(rows: List[Row]):
                 raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "Jump server IP is required when jump server is enabled"))
             if not row.jumpServer.user or not row.jumpServer.user.strip():
                 raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "Jump server username is required when jump server is enabled"))
+            if not row.jumpServer.password or not row.jumpServer.password.strip():
+                raise HTTPException(status_code=400, detail=error_payload("VALIDATION_ERROR", "Jump server password is required when jump server is enabled"))
     
     # 存储房间信息
     active_rooms[room] = {

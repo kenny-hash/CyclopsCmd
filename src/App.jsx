@@ -29,12 +29,12 @@ const convertToObject = (arrayData, headers) => {
       password: row[2] || 'huawei@1234',
       port: parseInt(row[3]) || 22
     };
-    
+
     // 添加命令字段
     for (let i = 4; i < headers.length; i++) {
       obj[headers[i]] = row[i] || '';
     }
-    
+
     return obj;
   });
 };
@@ -63,15 +63,16 @@ export default function App() {
   const [errorMessages, setErrorMessages] = useState([]);
   const [validationErrors, setValidationErrors] = useState([]);
   const isDebugMode = import.meta.env.MODE === 'development';
-  
+
   // 跳板机相关状态
   const [useJumpServer, setUseJumpServer] = useState(false);
   const [jumpServerConfig, setJumpServerConfig] = useState({
     ip: '',
     user: 'root',
+    password: '',
     port: 22
   });
-  
+
   // 配置持久化相关状态
   const [configName, setConfigName] = useState("");
   const [savedConfigs, setSavedConfigs] = useState([]);
@@ -146,14 +147,14 @@ export default function App() {
   const setupHeaderDblClick = () => {
     // 确保表格实例存在
     if (!hotRef.current || !hotRef.current.hotInstance) return;
-    
+
     try {
       const hotInstance = hotRef.current.hotInstance;
-      
+
       // 找到所有克隆层中的表头单元格。Windows/Electron 打包后 Handsontable
       // 可能不会只使用 .ht_clone_top，限制在单个克隆层会漏绑事件。
       const headerElements = hotInstance.rootElement.querySelectorAll('.htCore thead th[data-command-col]');
-      
+
       // 为每个表头单元格添加双击事件
       headerElements.forEach((th) => {
         const colIndex = Number(th.dataset.commandCol);
@@ -162,7 +163,7 @@ export default function App() {
           // 添加视觉提示
           th.style.cursor = 'pointer';
           th.title = '双击编辑命令';
-          
+
           // 使用 ondblclick 而不是 addEventListener，避免多次添加
           th.ondblclick = (e) => {
             // 阻止事件冒泡
@@ -211,23 +212,23 @@ export default function App() {
     const timerId = setTimeout(() => {
       setupHeaderDblClick();
     }, 500);
-    
+
     return () => clearTimeout(timerId);
   }, []);
-  
+
   // 监听表格变化，重新设置双击事件
   useEffect(() => {
     if (!hotRef.current || !hotRef.current.hotInstance) return;
-    
+
     const observer = new MutationObserver(() => {
       // 表格DOM变化时，重新应用双击事件
       setTimeout(() => setupHeaderDblClick(), 0);
     });
-    
+
     try {
       const hotInstance = hotRef.current.hotInstance;
       const tableContainer = hotInstance.rootElement;
-      
+
       if (tableContainer) {
         observer.observe(tableContainer, {
           childList: true,
@@ -237,7 +238,7 @@ export default function App() {
     } catch (error) {
       console.error("设置表格观察器时出错:", error);
     }
-    
+
     return () => {
       observer.disconnect();
     };
@@ -249,23 +250,23 @@ export default function App() {
       alert("Please enter a configuration name");
       return;
     }
-    
+
     setConfigLoading(true);
-    
+
     // 在保存前获取当前表格的实际数据，确保使用最新状态
     let currentObjectData = objectData;
     let currentCommands = commands;
-    
+
     if (hotRef.current && hotRef.current.hotInstance) {
       const hotInstance = hotRef.current.hotInstance;
       const arrayData = hotInstance.getData();
       const headers = hotInstance.getColHeader();
-      
+
       // 确保我们使用最新的表格数据
       currentObjectData = convertToObject(arrayData, headers);
       currentCommands = headers.slice(4);
     }
-    
+
     try {
       const res = await fetch(apiUrl('/api/v1/configs'), {
         method: 'POST',
@@ -282,7 +283,7 @@ export default function App() {
           }
         })
       });
-      
+
       if (res.ok) {
         const result = await res.json();
         if (result.success) {
@@ -312,11 +313,11 @@ export default function App() {
       const hotInstance = hotRef.current.hotInstance;
       const arrayData = hotInstance.getData();
       const headers = hotInstance.getColHeader();
-      
+
       // 更新对象数据，确保使用最新状态
       const currentObjectData = convertToObject(arrayData, headers);
       const currentCommands = headers.slice(4);
-      
+
       // 只有在实际有变化时才更新状态，避免不必要的重新渲染
       if (JSON.stringify(currentObjectData) !== JSON.stringify(objectData)) {
         setObjectData(currentObjectData);
@@ -325,7 +326,7 @@ export default function App() {
         setCommands(currentCommands);
       }
     }
-    
+
     // 然后打开模态窗口
     setShowConfigModal(true);
   };
@@ -334,21 +335,21 @@ export default function App() {
   const loadConfig = async (configId) => {
     setConfigLoading(true);
     setShowDropdown(false);
-    
+
     try {
       const res = await fetch(apiUrl(`/api/v1/configs/${configId}`));
       if (res.ok) {
         const result = await res.json();
-        
+
         if (result.success && result.data) {
           if (result.data.commands && Array.isArray(result.data.commands)) {
             setCommands(result.data.commands);
           }
-          
+
           if (result.data.servers && Array.isArray(result.data.servers)) {
             setObjectData(result.data.servers);
           }
-          
+
           // 加载跳板机配置
           if (result.data.jumpServer) {
             setUseJumpServer(result.data.jumpServer.enabled || false);
@@ -356,11 +357,12 @@ export default function App() {
               setJumpServerConfig({
                 ip: result.data.jumpServer.config.ip || '',
                 user: result.data.jumpServer.config.user || 'root',
+                password: result.data.jumpServer.config.password || '',
                 port: result.data.jumpServer.config.port || 22
               });
             }
           }
-          
+
           alert(`Configuration "${result.name}" loaded successfully`);
         } else {
           alert(`Error: ${result.error || 'Invalid configuration data'}`);
@@ -381,14 +383,14 @@ export default function App() {
     if (!confirm(`Are you sure you want to delete "${configName}"?`)) {
       return;
     }
-    
+
     setConfigLoading(true);
-    
+
     try {
       const res = await fetch(apiUrl(`/api/v1/configs/${configId}`), {
         method: 'DELETE'
       });
-      
+
       if (res.ok) {
         const result = await res.json();
         if (result.success) {
@@ -411,20 +413,20 @@ export default function App() {
   // 导出配置为JSON文件
   const exportConfig = () => {
     setShowDropdown(false);
-    
+
     // 确保我们导出的是当前表格的实际数据
     let currentObjectData = objectData;
     let currentCommands = commands;
-    
+
     if (hotRef.current && hotRef.current.hotInstance) {
       const hotInstance = hotRef.current.hotInstance;
       const arrayData = hotInstance.getData();
       const headers = hotInstance.getColHeader();
-      
+
       currentObjectData = convertToObject(arrayData, headers);
       currentCommands = headers.slice(4);
     }
-    
+
     const configData = {
       commands: currentCommands,
       servers: currentObjectData,
@@ -433,10 +435,10 @@ export default function App() {
         config: jumpServerConfig
       }
     };
-    
+
     const blob = new Blob([JSON.stringify(configData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
+
     const a = document.createElement('a');
     a.href = url;
     a.download = `server-config-${new Date().toISOString().slice(0,10)}.json`;
@@ -477,7 +479,7 @@ export default function App() {
   const importConfig = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -486,11 +488,11 @@ export default function App() {
           if (config.commands && Array.isArray(config.commands)) {
             setCommands(config.commands);
           }
-          
+
           if (config.servers && Array.isArray(config.servers)) {
             setObjectData(config.servers);
           }
-          
+
           // 导入跳板机配置
           if (config.jumpServer) {
             setUseJumpServer(config.jumpServer.enabled || false);
@@ -498,11 +500,12 @@ export default function App() {
               setJumpServerConfig({
                 ip: config.jumpServer.config.ip || '',
                 user: config.jumpServer.config.user || 'root',
+                password: config.jumpServer.config.password || '',
                 port: config.jumpServer.config.port || 22
               });
             }
           }
-          
+
           alert('Configuration imported successfully');
         } else {
           alert('Invalid configuration file');
@@ -513,7 +516,7 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    
+
     // 重置文件输入，允许重新选择相同的文件
     event.target.value = null;
   };
@@ -524,7 +527,7 @@ export default function App() {
       console.error('Table reference not initialized');
       return;
     }
-    
+
     const hotInstance = hotRef.current.hotInstance;
     const currentArrayData = hotInstance.getData();
     const currentColumns = hotInstance.getColHeader();
@@ -535,6 +538,7 @@ export default function App() {
       enabled: useJumpServer,
       ip: String(jumpServerConfig.ip || '').trim(),
       user: String(jumpServerConfig.user || '').trim(),
+      password: String(jumpServerConfig.password || '').trim(),
       port: Number.parseInt(jumpServerConfig.port, 10)
     };
 
@@ -545,6 +549,9 @@ export default function App() {
       if (!normalizedJumpServer.user) {
         nextValidationErrors.push('启用跳板机时必须填写跳板机用户名。');
       }
+      if (!normalizedJumpServer.password) {
+        nextValidationErrors.push('启用跳板机时必须填写跳板机密码。');
+      }
       if (!isValidPort(normalizedJumpServer.port)) {
         nextValidationErrors.push('跳板机端口必须在 1 到 65535 之间。');
       }
@@ -554,7 +561,7 @@ export default function App() {
     if (validCommands.length === 0) {
       nextValidationErrors.push('至少需要保留一个非空命令列。');
     }
-      
+
     // 将表格数据转换为后端所需的格式
     const rows = currentArrayData.map((row, idx) => {
       const ip = String(row[0] || '').trim();
@@ -583,12 +590,12 @@ export default function App() {
         commands: validCommands,
         rowId: `row-${idx}`
       };
-      
+
       // 如果启用跳板机，添加跳板机配置
       if (useJumpServer) {
         baseData.jumpServer = normalizedJumpServer;
       }
-      
+
       return baseData;
     });
 
@@ -621,7 +628,7 @@ export default function App() {
       if (res.ok) {
         const { room } = await res.json();
         console.log("WebSocket room:", room);
-        
+
         const wsBaseUrl = desktopConfig.wsBaseUrl || import.meta.env.VITE_BACKEND_WS_URL;
         const wsUrl = wsBaseUrl
           ? `${wsBaseUrl.replace(/\/$/, '')}/ws/${room}`
@@ -635,7 +642,7 @@ export default function App() {
 
         ws.onmessage = (event) => {
           const message = JSON.parse(event.data);
-          
+
           // 处理完成状态消息
           if (message.status === "completed") {
             console.log("All commands completed successfully");
@@ -643,7 +650,7 @@ export default function App() {
             setConnectionStatus(null);
             return;
           }
-          
+
           // 处理错误消息
           if (message.error) {
             const errorText = message.errorMessage || message.error.message || message.error;
@@ -651,96 +658,96 @@ export default function App() {
             setErrorMessages(prevErrors => [...prevErrors, formattedError]);
             return;
           }
-          
+
           // 确保消息包含rowId字段
           if (!message.rowId) {
             console.warn("Received message without rowId:", message);
             return;
           }
-          
+
           // 解析行ID以获取行索引
           const rowIdParts = message.rowId.split('-');
           const rowIndex = parseInt(rowIdParts[1]);
-          
+
           if (isNaN(rowIndex) || rowIndex < 0) {
             console.error('Invalid row index from rowId:', message.rowId);
             return;
           }
-          
+
           // 更新对应命令的输出
           if (message.command && message.output) {
             // 找到对应的命令列
             const commandIndex = currentCommands.indexOf(message.command);
-            
+
             if (commandIndex !== -1) {
               const columnIndex = 4 + commandIndex; // IP, User, Password, Port 占用前4列
-              
+
               // 处理ANSI转义序列
               const processedOutput = message.output;
-              
+
               // 创建一个自定义的单元格渲染器
               if (!hotInstance.getCellMeta(rowIndex, columnIndex).renderer) {
                 hotInstance.setCellMeta(rowIndex, columnIndex, 'renderer', function(instance, td, row, col, prop, value) {
                   // 默认渲染
                   Handsontable.renderers.TextRenderer.apply(this, arguments);
-                  
+
                   // 如果有值，应用ANSI转换
                   if (value) {
                     // 使用innerHTML设置转换后的HTML
                     td.innerHTML = ansiToHtml(value);
-                    
+
                     // 添加自定义类以应用额外样式
                     td.className += ' ansi-enabled-cell';
                   }
                 });
               }
-              
+
               // 设置原始值（不带HTML）到单元格数据
               hotInstance.setDataAtCell(rowIndex, columnIndex, processedOutput);
-              
+
               // 确保单元格仍可选择和复制
               const cellMeta = hotInstance.getCellMeta(rowIndex, columnIndex);
               cellMeta.copyable = true;
-              
+
               // 重新渲染表格
               hotInstance.render();
             }
           } else if (message.output) {
             // 如果没有指定命令，将输出添加到通用输出字段
             const lastColumnIndex = hotInstance.countCols() - 1;
-            
+
             // 处理ANSI转义序列
             const processedOutput = message.output;
-            
+
             // 创建一个自定义的单元格渲染器
             if (!hotInstance.getCellMeta(rowIndex, lastColumnIndex).renderer) {
               hotInstance.setCellMeta(rowIndex, lastColumnIndex, 'renderer', function(instance, td, row, col, prop, value) {
                 // 默认渲染
                 Handsontable.renderers.TextRenderer.apply(this, arguments);
-                
+
                 // 如果有值，应用ANSI转换
                 if (value) {
                   // 使用innerHTML设置转换后的HTML
                   td.innerHTML = ansiToHtml(value);
-                  
+
                   // 添加自定义类以应用额外样式
                   td.className += ' ansi-enabled-cell';
                 }
               });
             }
-            
+
             // 设置原始值（不带HTML）到单元格数据
             hotInstance.setDataAtCell(rowIndex, lastColumnIndex, processedOutput);
-            
+
             // 确保单元格仍可选择和复制
             const cellMeta = hotInstance.getCellMeta(rowIndex, lastColumnIndex);
             cellMeta.copyable = true;
-            
+
             // 重新渲染表格
             hotInstance.render();
           }
         };
-        
+
         ws.onerror = (error) => {
           console.error('WebSocket error:', error);
           setConnectionStatus('error');
@@ -778,33 +785,33 @@ export default function App() {
   // 添加新命令列
   const addCommandColumn = (index, commandName, { editAfterInsert = false } = {}) => {
     if (!hotRef.current) return;
-    
+
     const hotInstance = hotRef.current.hotInstance;
-    
+
     // 获取当前数据和列头
     const currentData = hotInstance.getData();
     const currentHeaders = [...hotInstance.getColHeader()];
-    
+
     // 向所有行插入空数据
     const newData = currentData.map(row => {
       const newRow = [...row];
       newRow.splice(index, 0, '');  // 在指定位置插入空字符串
       return newRow;
     });
-    
+
     // 更新表头
     currentHeaders.splice(index, 0, commandName);
-    
+
     // 更新表格
     hotInstance.updateSettings({
       data: newData,
       colHeaders: currentHeaders
     });
-    
+
     // 更新命令列表
     const newCommands = currentHeaders.slice(4);
     setCommands(newCommands);
-    
+
     // 更新对象数据
     const updatedObjectData = convertToObject(newData, currentHeaders);
     setObjectData(updatedObjectData);
@@ -817,33 +824,33 @@ export default function App() {
   // 删除命令列
   const removeCommandColumn = (index) => {
     if (!hotRef.current) return;
-    
+
     const hotInstance = hotRef.current.hotInstance;
-    
+
     // 获取当前数据和列头
     const currentData = hotInstance.getData();
     const currentHeaders = [...hotInstance.getColHeader()];
-    
+
     // 从所有行中移除该列数据
     const newData = currentData.map(row => {
       const newRow = [...row];
       newRow.splice(index, 1);  // 移除指定位置的列
       return newRow;
     });
-    
+
     // 更新表头
     currentHeaders.splice(index, 1);
-    
+
     // 更新表格
     hotInstance.updateSettings({
       data: newData,
       colHeaders: currentHeaders
     });
-    
+
     // 更新命令列表
     const newCommands = currentHeaders.slice(4);
     setCommands(newCommands);
-    
+
     // 更新对象数据
     const updatedObjectData = convertToObject(newData, currentHeaders);
     setObjectData(updatedObjectData);
@@ -852,7 +859,7 @@ export default function App() {
   // 重命名表头
   const renameColumn = (index) => {
     if (!hotRef.current || index < 4) return;
-    
+
     const hotInstance = hotRef.current.hotInstance;
     editCommandHeader(hotInstance, index);
   };
@@ -868,11 +875,11 @@ export default function App() {
         { type: 'numeric' }, // Port
         ...commands.map(() => ({ type: 'text', copyable: true, readOnly: true })) // 命令输出列
       ];
-      
+
       hotInstance.updateSettings({ columns });
     }
   }, [commands]);
-  
+
   // 表格配置
   const hotSettings = {
     data: data, // 使用二维数组作为数据源
@@ -883,7 +890,7 @@ export default function App() {
     stretchH: "all",
     manualColumnResize: true,
     manualRowResize: true,
-    
+
     // 启用复制和选择功能
     copyPaste: {
       copyable: true,
@@ -898,10 +905,10 @@ export default function App() {
       }
     },
     fragmentSelection: true,
-    
+
     // 确保单元格内容可选
     readOnly: false,
-    
+
     // 定义单元格类型，使命令输出列可读不可写
     columns: [
       { type: 'text' },   // IP
@@ -910,7 +917,7 @@ export default function App() {
       { type: 'numeric' }, // Port
       ...commands.map(() => ({ type: 'text', readOnly: true })) // 命令输出列
     ],
-    
+
     // 控制哪些列可以重命名
     beforeRenameColumn: (currentColumnName, newColumnName, columnIndex) => {
       // 只允许重命名命令列（索引大于等于4）
@@ -918,27 +925,27 @@ export default function App() {
         // 不允许重命名基本列
         return false;
       }
-      
+
       // 确保命令名不为空
       if (!newColumnName || newColumnName.trim() === '') {
         return false;
       }
-      
+
       // 允许重命名命令列
       return true;
     },
-    
+
     // 处理重命名后的数据更新
     afterRenameColumn: (columnIndex, oldValue, newValue) => {
       if (columnIndex >= 4) {
         // 确保我们访问的是正确的列集合
         const hotInstance = hotRef.current.hotInstance;
         const headers = [...hotInstance.getColHeader()];
-        
+
         // 更新命令列列表
         const newCommands = headers.slice(4);
         setCommands(newCommands);
-        
+
         // 更新对象数据
         const arrayData = hotInstance.getData();
         const updatedObjectData = convertToObject(arrayData, headers);
@@ -985,7 +992,7 @@ export default function App() {
         editCommandHeader(hotInstance, col);
       };
     },
-    
+
     // 使用Handsontable内置的右键菜单功能
     contextMenu: {
       items: {
@@ -1002,10 +1009,10 @@ export default function App() {
             // 获取选中的单元格
             const selected = this.getSelected();
             if (!selected || !selected.length) return true;
-            
+
             // 获取选中单元格的列索引
             const firstColIndex = selected[0][1];
-            
+
             // 禁止在基本信息列之前插入命令列
             return firstColIndex < 4;
           },
@@ -1013,9 +1020,9 @@ export default function App() {
             // 获取选中的单元格
             const selected = this.getSelected();
             if (!selected || !selected.length) return;
-            
+
             const [, firstCol] = selected[0];
-            
+
             // 生成临时命令名，并立即打开表头编辑器，避免用户把命令误填到输出单元格。
             const tempCommandName = `command_${Math.floor(Math.random() * 10000)}`;
             addCommandColumn(firstCol, tempCommandName, { editAfterInsert: true });
@@ -1026,18 +1033,18 @@ export default function App() {
           disabled: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return true;
-            
+
             const firstColIndex = selected[0][1];
-            
+
             // 禁止在基本信息列之前插入命令列
             return firstColIndex < 3; // 允许在Port列后面插入
           },
           callback: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return;
-            
+
             const [, firstCol] = selected[0];
-            
+
             // 生成临时命令名，并立即打开表头编辑器，避免用户把命令误填到输出单元格。
             const tempCommandName = `command_${Math.floor(Math.random() * 10000)}`;
             addCommandColumn(firstCol + 1, tempCommandName, { editAfterInsert: true });
@@ -1052,40 +1059,40 @@ export default function App() {
           disabled: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return true;
-            
+
             const [, firstCol] = selected[0];
             return firstCol < 4; // 禁止删除基本信息列
           },
           callback: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return;
-            
+
             const [, firstCol] = selected[0];
-            
+
             // 手动实现列删除
             const currentData = this.getData();
             const currentHeaders = [...this.getColHeader()];
-            
+
             // 从所有行中移除该列数据
             const newData = currentData.map(row => {
               const newRow = [...row];
               newRow.splice(firstCol, 1);  // 移除指定位置的列
               return newRow;
             });
-            
+
             // 更新表头
             currentHeaders.splice(firstCol, 1);
-            
+
             // 更新表格
             this.updateSettings({
               data: newData,
               colHeaders: currentHeaders
             });
-            
+
             // 更新React状态
             const newCommands = currentHeaders.slice(4);
             setCommands(newCommands);
-            
+
             const updatedObjectData = convertToObject(newData, currentHeaders);
             setObjectData(updatedObjectData);
           }
@@ -1099,33 +1106,33 @@ export default function App() {
           disabled: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return true;
-            
+
             const [, firstCol] = selected[0];
             return firstCol < 4; // 只允许命令列重命名
           },
           callback: function() {
             const selected = this.getSelected();
             if (!selected || !selected.length) return;
-            
+
             const [, firstCol] = selected[0];
-            
+
             if (firstCol >= 4) {
               // 获取当前列标题
               const currentHeader = this.getColHeader()[firstCol];
-              
+
               // 弹出重命名对话框
               const newHeader = prompt("Edit command:", currentHeader);
-              
+
               if (newHeader && newHeader !== currentHeader && newHeader.trim() !== '') {
                 // 更新列标题
                 const headers = [...this.getColHeader()];
                 headers[firstCol] = newHeader;
                 this.updateSettings({ colHeaders: headers });
-                
+
                 // 更新React状态
                 const newCommands = headers.slice(4);
                 setCommands(newCommands);
-                
+
                 const arrayData = this.getData();
                 const updatedObjectData = convertToObject(arrayData, headers);
                 setObjectData(updatedObjectData);
@@ -1135,7 +1142,7 @@ export default function App() {
         }
       }
     },
-    
+
     // 单元格值改变后的回调
     afterChange: (changes, source) => {
       if (source === 'edit' || source === 'CopyPaste.paste') {
@@ -1143,41 +1150,41 @@ export default function App() {
         const hotInstance = hotRef.current.hotInstance;
         const arrayData = hotInstance.getData();
         const headers = hotInstance.getColHeader();
-        
+
         const updatedObjectData = convertToObject(arrayData, headers);
         setObjectData(updatedObjectData);
         setValidationErrors([]);
       }
     },
-    
+
     // 注册创建/移除列后的回调
     afterCreateCol: (index, amount) => {
       if (index < 4) return; // 忽略基本信息列
-      
+
       // 由于我们在col_left/col_right的callback中已经处理了状态更新
       // 这里不需要重复处理，但保留这个钩子以防需要额外逻辑
     },
-    
+
     afterRemoveCol: (index, amount) => {
       if (index < 4) return; // 忽略基本信息列
-      
+
       // 由于我们在remove_col的callback中已经处理了状态更新
       // 这里不需要重复处理，但保留这个钩子以防需要额外逻辑
     },
-    
+
     // 表格渲染后回调，用于设置双击编辑功能
     afterRender: function() {
       // 延迟执行，确保表格已完全渲染
       setTimeout(() => setupHeaderDblClick(), 0);
     },
-    
+
     // 其他Handsontable设置
     autoWrapRow: true,
     autoWrapCol: true,
     wordWrap: true,
     licenseKey: "non-commercial-and-evaluation"
   };
-  
+
   // 关闭下拉菜单的处理程序
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -1204,13 +1211,13 @@ export default function App() {
                 <stop offset="0%" style={{stopColor:"#1e293b", stopOpacity:1}} />
                 <stop offset="100%" style={{stopColor:"#0f172a", stopOpacity:1}} />
               </linearGradient>
-              
+
               {/* 终端屏幕渐变 */}
               <linearGradient id="screenGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" style={{stopColor:"#000000", stopOpacity:0.9}} />
                 <stop offset="100%" style={{stopColor:"#1a1a1a", stopOpacity:0.9}} />
               </linearGradient>
-              
+
               {/* 阴影滤镜 */}
               <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
                 <feDropShadow dx="2" dy="4" stdDeviation="3" floodOpacity="0.3"/>
@@ -1219,7 +1226,7 @@ export default function App() {
 
             {/* 终端屏幕框架 */}
             <rect x="40" y="60" width="120" height="80" rx="6" ry="6" fill="url(#screenGradient)" stroke="rgba(255,255,255,0.2)" strokeWidth="1"/>
-            
+
             {/* 屏幕内容 - 命令行提示符和代码 */}
             <g fontFamily="monospace" fontSize="7" fill="#00ff41">
               {/* 命令提示符 */}
@@ -1227,7 +1234,7 @@ export default function App() {
               <rect x="122" y="72" width="4" height="8" fill="#00ff41" opacity="0.7">
                 <animate attributeName="opacity" values="0.7;0;0.7" dur="1s" repeatCount="indefinite"/>
               </rect>
-              
+
               {/* 代码行 */}
               <text x="45" y="95" opacity="0.8">You are not expected</text>
               <text x="45" y="108" opacity="0.8">to understand this.</text>
@@ -1240,7 +1247,7 @@ export default function App() {
         <div className="header-content">
           <h1 className="title">CyclopsCmd</h1>
           <p className="description">
-            Execute and monitor commands across multiple servers. 
+            Execute and monitor commands across multiple servers.
             Double-click on command headers to edit them.
             Right-click on the table for more operations.
           </p>
@@ -1258,7 +1265,7 @@ export default function App() {
           </p>
         </div>
       </div>
-      
+
       {/* 跳板机配置区域 */}
       <div className="jump-server-section">
         <div className="jump-server-toggle">
@@ -1273,18 +1280,18 @@ export default function App() {
           </label>
           <span className="jump-server-label">Use Jump Server / 使用跳板机</span>
         </div>
-        
+
         {useJumpServer && (
           <div className="jump-server-config">
             <div className="jump-server-notice">
               <div className="notice-icon">⚠️</div>
               <div className="notice-text">
-                <strong>Important:</strong> Please ensure passwordless SSH key authentication is configured for the jump server.
+                <strong>Important:</strong> Enter the jump server account password below for SSH authentication.
                 <br />
-                <strong>重要提示：</strong> 请确保已为跳板机配置免密SSH密钥认证。
+                <strong>重要提示：</strong> 请在下方填写用于 SSH 认证的跳板机账户密码。
               </div>
             </div>
-            
+
             <div className="jump-server-inputs">
               <div className="input-group">
                 <label>Jump Server IP / 跳板机IP:</label>
@@ -1297,7 +1304,7 @@ export default function App() {
                   required
                 />
               </div>
-              
+
               <div className="input-group">
                 <label>Username / 用户名:</label>
                 <input
@@ -1308,7 +1315,20 @@ export default function App() {
                   disabled={isRunning}
                 />
               </div>
-              
+
+
+              <div className="input-group">
+                <label>Password / 密码:</label>
+                <input
+                  type="password"
+                  value={jumpServerConfig.password}
+                  onChange={(e) => { setJumpServerConfig({...jumpServerConfig, password: e.target.value}); setValidationErrors([]); }}
+                  placeholder="Enter jump server password"
+                  disabled={isRunning}
+                  autoComplete="current-password"
+                />
+              </div>
+
               <div className="input-group">
                 <label>Port / 端口:</label>
                 <input
@@ -1325,20 +1345,20 @@ export default function App() {
           </div>
         )}
       </div>
-      
+
       <div className="button-group">
-        <button 
-          onClick={openSaveConfigModal} 
+        <button
+          onClick={openSaveConfigModal}
           className="button secondary-button"
           disabled={isRunning}
         >
           Save Config
         </button>
-        
+
 
         <div className="dropdown">
-          <button 
-            onClick={() => setShowDropdown(!showDropdown)} 
+          <button
+            onClick={() => setShowDropdown(!showDropdown)}
             className="button secondary-button"
             disabled={isRunning || configLoading}
           >
@@ -1352,14 +1372,14 @@ export default function App() {
                   <div className="dropdown-header">Saved Configurations</div>
                   {savedConfigs.map(config => (
                     <div key={config.id} className="dropdown-item-container">
-                      <a 
-                        className="dropdown-item" 
+                      <a
+                        className="dropdown-item"
                         onClick={() => loadConfig(config.id)}
                         title={config.name}
                       >
                         {config.name}
                       </a>
-                      <button 
+                      <button
                         className="dropdown-delete-btn"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1377,9 +1397,9 @@ export default function App() {
                   No saved configurations yet
                 </div>
               )}
-              
+
               <div className="dropdown-divider"></div>
-              
+
               <a className="dropdown-action-item" onClick={exportConfig}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -1388,7 +1408,7 @@ export default function App() {
                 </svg>
                 Export Configuration
               </a>
-              
+
               <a className="dropdown-action-item" onClick={triggerImport}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -1415,9 +1435,9 @@ export default function App() {
             </div>
           )}
         </div>
-        
-        <button 
-          onClick={run} 
+
+        <button
+          onClick={run}
           className={`button primary-button run-command-button ${isRunning ? 'disabled' : ''}`}
           disabled={isRunning}
         >
@@ -1434,7 +1454,7 @@ export default function App() {
               {connectionStatus === 'error' && 'Connection Error'}
             </div>
           )}
-          
+
           {validationErrors.length > 0 && (
             <div className="validation-errors-container" role="alert">
               <div className="error-messages-header">
@@ -1461,8 +1481,8 @@ export default function App() {
             <div className="error-messages-container">
               <div className="error-messages-header">
                 <span>错误消息 ({errorMessages.length})</span>
-                <button 
-                  className="clear-errors-btn" 
+                <button
+                  className="clear-errors-btn"
                   onClick={() => setErrorMessages([])}
                   title="清除所有错误消息"
                 >
@@ -1480,12 +1500,12 @@ export default function App() {
           )}
         </div>
       </div>
-    
-      
+
+
       <div className="table-container">
         <HotTable ref={hotRef} {...hotSettings} />
       </div>
-      
+
 
       {/* 表格操作指引模态窗口 */}
       {showOperationGuide && (
@@ -1542,13 +1562,13 @@ export default function App() {
               autoFocus
             />
             <div className="modal-buttons">
-              <button 
+              <button
                 onClick={() => setShowConfigModal(false)}
                 className="button-cancel"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={saveConfig}
                 className="button-save"
                 disabled={!configName.trim() || configLoading}
@@ -1599,7 +1619,7 @@ export default function App() {
           </div>
         </div>
       )}
-      
+
       {/* 隐藏的文件输入框，用于导入 */}
       <input
         ref={fileInputRef}
