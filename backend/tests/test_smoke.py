@@ -132,4 +132,32 @@ def test_execute_rejects_enabled_jump_server_without_required_fields(client):
     assert response.status_code == 422
     body = response.json()
     assert body["error"]["code"] == "VALIDATION_ERROR"
-    assert any("Jump server IP and username" in detail["msg"] for detail in body["error"]["details"])
+    assert any("Jump server IP, username and password" in detail["msg"] for detail in body["error"]["details"])
+
+
+def test_execute_accepts_enabled_jump_server_with_password(client):
+    response = client.post(
+        "/api/v1/execute",
+        json=[
+            {
+                "ip": "127.0.0.1",
+                "user": "root",
+                "password": "example-password",
+                "port": 22,
+                "commands": ["echo hello"],
+                "rowId": "row-1",
+                "jumpServer": {
+                    "enabled": True,
+                    "ip": "127.0.0.1",
+                    "user": "jump-user",
+                    "password": "jump-password",
+                    "port": 22,
+                },
+            }
+        ],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "room" in body
+    assert body["room"]
