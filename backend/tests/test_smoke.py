@@ -188,3 +188,29 @@ def test_via_jump_connection_key_isolated_by_jump_and_target_password(client):
     assert via_a != via_c
     assert "target-a" not in via_a
     assert "jump-a" not in via_a
+
+
+def test_sanitize_connection_key_redacts_fingerprints(client):
+    import app as app_module
+
+    jump = app_module.build_jump_connection_key("192.0.2.10", "jump-user", "jump-secret", 22)
+    via = app_module.build_via_jump_connection_key("10.0.0.5", "root", "target-secret", 22, jump)
+    sanitized = app_module.sanitize_connection_key(via)
+
+    assert "jump-secret" not in sanitized
+    assert "target-secret" not in sanitized
+    assert app_module.credential_fingerprint("jump-secret") not in sanitized
+    assert app_module.credential_fingerprint("target-secret") not in sanitized
+    assert "<redacted>" in sanitized
+
+
+def test_describe_ssh_exception_includes_safe_channel_details(client):
+    import asyncssh
+    import app as app_module
+
+    exc = asyncssh.misc.ChannelOpenError(1, "administratively prohibited")
+    diagnostics = app_module.describe_ssh_exception(exc)
+
+    assert diagnostics["exception_type"] == "ChannelOpenError"
+    assert diagnostics["code"] == 1
+    assert diagnostics["reason"] == "administratively prohibited"

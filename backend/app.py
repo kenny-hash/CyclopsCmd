@@ -216,6 +216,62 @@ def credential_fingerprint(secret: Optional[str]) -> str:
     return hashlib.sha256((secret or "").encode("utf-8")).hexdigest()[:12]
 
 
+def sanitize_connection_key(key: Optional[str]) -> str:
+    """Return a log-safe cache key by redacting credential fingerprints."""
+    if not key:
+        return ""
+    parts = []
+    for segment in str(key).split("->"):
+        fields = segment.split(":")
+        if len(fields) >= 4:
+            fields[-1] = "<redacted>"
+        parts.append(":".join(fields))
+    return "->".join(parts)
+
+
+def describe_ssh_exception(exc: Exception) -> Dict[str, Any]:
+    """Extract safe diagnostics from AsyncSSH exceptions for logs/client details."""
+    diagnostics = {
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+    }
+    for attr in ("code", "reason", "lang", "host", "port"):
+        if hasattr(exc, attr):
+            value = getattr(exc, attr)
+            if value is not None:
+                diagnostics[attr] = value
+    return diagnostics
+
+
+def remove_ssh_connection(key: str):
+    """Close and remove an SSH connection from the shared cache."""
+    data = ssh_connections.pop(key, None)
+    if not data:
+        return
+    try:
+        data["conn"].close()
+    except Exception as exc:
+        logger.debug(
+            "Error closing cached SSH connection",
+            extra={"connection_key": sanitize_connection_key(key), "diagnostics": describe_ssh_exception(exc)},
+        )
+
+
+def remove_jump_server_connection(key: str):
+    """Close and remove a jump-server connection and its side indexes."""
+    data = jump_server_connections.pop(key, None)
+    if data:
+        try:
+            jump_server_connection_keys.pop(id(data["conn"]), None)
+            data["conn"].close()
+        except Exception as exc:
+            logger.debug(
+                "Error closing cached jump server connection",
+                extra={"jump_key": sanitize_connection_key(key), "diagnostics": describe_ssh_exception(exc)},
+            )
+    jump_server_tunnel_locks.pop(key, None)
+
+
 def build_jump_connection_key(jump_host, jump_username, jump_password=None, jump_port=22):
     normalized_host = str(jump_host).replace(" ", "")
     auth_fingerprint = credential_fingerprint(jump_password)
@@ -252,14 +308,7 @@ async def get_jump_server_connection(jump_host, jump_username, jump_password=Non
             logger.warning(f"Cached jump server SSH connection to {jump_host}:{jump_port} is invalid, creating new one: {e}")
             try:
                 if key in jump_server_connections:
-                    try:
-                        cached_conn = jump_server_connections[key]["conn"]
-                        jump_server_connection_keys.pop(id(cached_conn), None)
-                        cached_conn.close()
-                    except:
-                        pass
-                    del jump_server_connections[key]
-                    jump_server_tunnel_locks.pop(key, None)
+                    remove_jump_server_connection(key)
             except Exception:
                 pass
     
@@ -311,30 +360,24 @@ async def get_ssh_connection_via_jump(host, username, password, port, jump_conn)
         try:
             conn = ssh_connections[key]["conn"]
             
-            # 测试连接是否有效
-            try:
-                test_proc = await asyncio.wait_for(
-                    conn.create_process("echo connection_test"),
-                    timeout=10
-                )
-                test_result = await test_proc.wait()
-                
-                ssh_connections[key]["last_used"] = time.time()
-                logger.debug(f"Reusing SSH connection via jump server to {host}:{port}")
-                return conn
-            except Exception as e:
-                logger.warning(f"SSH connection via jump server test failed: {e}")
-                raise
+            # 经跳板机的目标连接复用时，不再额外 create_process() 做健康检查。
+            # 这类检查会在目标机再打开一个 session channel，并且底层仍要经过跳板机隧道；
+            # 在 Windows 客户端批量执行命令时，容易把堡垒机/目标机的 MaxSessions 打满。
+            if conn.is_closed():
+                raise asyncssh.misc.ConnectionLost("Cached SSH connection via jump server is closed")
+
+            ssh_connections[key]["last_used"] = time.time()
+            logger.debug(
+                f"Reusing SSH connection via jump server to {host}:{port}",
+                extra={"connection_key": sanitize_connection_key(key), "jump_key": sanitize_connection_key(jump_key)},
+            )
+            return conn
                 
         except Exception as e:
             logger.warning(f"Cached SSH connection via jump server to {host}:{port} is invalid, creating new one: {e}")
             try:
                 if key in ssh_connections:
-                    try:
-                        ssh_connections[key]["conn"].close()
-                    except:
-                        pass
-                    del ssh_connections[key]
+                    remove_ssh_connection(key)
             except Exception:
                 pass
     
@@ -362,7 +405,15 @@ async def get_ssh_connection_via_jump(host, username, password, port, jump_conn)
         logger.info(f"Created new SSH connection via jump server to {host}:{port}")
         return conn
     except Exception as e:
-        logger.error(f"Error creating SSH connection via jump server to {host}:{port}: {e}", exc_info=True)
+        logger.error(
+            f"Error creating SSH connection via jump server to {host}:{port}: {e}",
+            exc_info=True,
+            extra={
+                "connection_key": sanitize_connection_key(key),
+                "jump_key": sanitize_connection_key(jump_key),
+                "diagnostics": describe_ssh_exception(e),
+            },
+        )
         raise
 
 async def get_ssh_connection(host, username, password, port=22):
@@ -502,35 +553,29 @@ async def cleanup_connections():
                 
                 if current_time - data["last_used"] > 300:  # 5分钟未使用
                     try:
-                        jump_server_connection_keys.pop(id(data["conn"]), None)
-                        data["conn"].close()
+                        remove_jump_server_connection(key)
                     except Exception as e:
                         logger.error(f"Error closing jump server connection: {e}")
                     
-                    del jump_server_connections[key]
-                    jump_server_tunnel_locks.pop(key, None)
+                    # remove_jump_server_connection() already removed cache entries.
                     cleaned += 1
                     logger.debug(f"Cleaned idle jump server connection to {host}")
                 
                 elif current_time - data["last_used"] > 1800:  # 30分钟健康检查
                     checked += 1
-                    try:
-                        conn = data["conn"]
-                        test_proc = await asyncio.wait_for(
-                            conn.create_process("echo jump_health_check"),
-                            timeout=5
+                    conn = data["conn"]
+                    if conn.is_closed():
+                        logger.warning(
+                            f"Jump server connection to {host} is closed during pool maintenance",
+                            extra={"jump_key": sanitize_connection_key(key)},
                         )
-                        await test_proc.wait()
-                        logger.debug(f"Jump server connection to {host} is healthy")
-                    except Exception as e:
-                        logger.warning(f"Health check failed for jump server connection to {host}: {e}")
-                        try:
-                            data["conn"].close()
-                        except:
-                            pass
-                        
-                        del jump_server_connections[key]
+                        remove_jump_server_connection(key)
                         cleaned += 1
+                    else:
+                        logger.debug(
+                            f"Jump server connection to {host} is still open",
+                            extra={"jump_key": sanitize_connection_key(key)},
+                        )
             except Exception as e:
                 logger.error(f"Error during jump server connection cleanup: {e}")
         
@@ -805,26 +850,20 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                             try:
                                 # 将旧连接从连接池中移除
                                 if use_jump_server:
-                                    key = f"via_jump_{row.ip}:{row.port}:{row.user}"
+                                    jump_key = jump_server_connection_keys.get(id(jump_conn), f"jump_unknown_{id(jump_conn)}")
+                                    key = build_via_jump_connection_key(row.ip, row.user, row.password, row.port, jump_key)
                                 else:
                                     key = f"{row.ip}:{row.port}:{row.user}"
-                                
-                                if key in ssh_connections:
-                                    del ssh_connections[key]
+
+                                remove_ssh_connection(key)
                                 
                                 # 重新连接
                                 if use_jump_server:
                                     # 如果是跳板机连接，可能需要重新连接跳板机
                                     if jump_conn:
-                                        try:
-                                            # 测试跳板机连接是否还有效
-                                            test_proc = await asyncio.wait_for(
-                                                jump_conn.create_process("echo test"),
-                                                timeout=5
-                                            )
-                                            await test_proc.wait()
-                                        except:
-                                            # 跳板机连接也失效了，重新连接
+                                        if jump_conn.is_closed():
+                                            # 跳板机连接也失效了，重新连接。不要用 create_process()
+                                            # 探测跳板机，否则会额外消耗一个 session channel。
                                             jump_conn = await get_jump_server_connection(
                                                 row.jumpServer.ip, 
                                                 row.jumpServer.user,
