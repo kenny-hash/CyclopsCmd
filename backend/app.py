@@ -143,7 +143,7 @@ ERROR_MESSAGES = {
     "SSH_CONNECTION_REFUSED": "SSH 连接被拒绝，请检查端口是否开放或服务是否运行。",
     "SSH_CONNECTION_FAILED": "SSH 连接失败，请检查服务器配置。",
     "SSH_CHANNEL_ERROR": "SSH 通道打开失败，请检查服务器会话限制或网络状态。",
-    "SSH_TUNNEL_OPEN_FAILED": "跳板机已登录成功，但无法打开到目标服务器的隧道。当前跳板机实现使用 SSH direct-tcpip 隧道，需要堡垒机允许 TCP 转发；请检查跳板机到目标地址/端口的网络连通性、AllowTcpForwarding、PermitOpen 或访问控制规则。",
+    "SSH_TUNNEL_OPEN_FAILED": "跳板机已登录成功，但无法打开到目标服务器的隧道。当前跳板机实现使用 SSH direct-tcpip 隧道，需要堡垒机允许 TCP 转发；请检查跳板机到目标地址/端口的网络连通性、AllowTcpForwarding、PermitOpen、Match 覆盖配置、访问控制规则，并查看跳板机 sshd 日志。",
     "COMMAND_TIMEOUT": "命令执行超时，请检查命令是否长时间阻塞。",
     "COMMAND_EXECUTION_FAILED": "命令执行失败，请检查命令内容或服务器状态。",
     "INTERNAL_ERROR": "服务内部错误，请稍后重试。",

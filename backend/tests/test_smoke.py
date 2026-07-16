@@ -226,3 +226,5 @@ def test_jump_tunnel_error_message_is_actionable(client):
     assert "TCP 转发" in message
     assert "AllowTcpForwarding" in message
     assert "PermitOpen" in message
+    assert "Match" in message
+    assert "sshd 日志" in message
