@@ -222,5 +222,7 @@ def test_jump_tunnel_error_message_is_actionable(client):
     message = app_module.ERROR_MESSAGES["SSH_TUNNEL_OPEN_FAILED"]
 
     assert "跳板机已登录成功" in message
+    assert "direct-tcpip" in message
+    assert "TCP 转发" in message
     assert "AllowTcpForwarding" in message
     assert "PermitOpen" in message
