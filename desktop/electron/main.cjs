@@ -6,11 +6,18 @@ const path = require('node:path');
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_START_TIMEOUT_MS = 30000;
+const APP_NAME = 'CyclopsCmd';
 
 let backendProcess = null;
 let backendPort = null;
 let mainWindow = null;
 let logFilePath = null;
+
+// Keep app.getPath('userData') stable across packaged builds. Without this,
+// Electron can derive the data directory from package.json's internal package
+// name (cyclops-cmd-electron), which makes published troubleshooting docs point
+// to the wrong %APPDATA% subdirectory on Windows.
+app.setName(APP_NAME);
 
 function ensureLogFile() {
   if (logFilePath) {
@@ -266,6 +273,9 @@ ipcMain.handle('cyclopscmd-export-debug-logs', async () => exportDebugLogs());
 
 app.whenReady()
   .then(startBackend)
+  .then(() => {
+    appendLog('INFO', `Debug log path: ${ensureLogFile()}`);
+  })
   .then(createWindow)
   .catch((error) => {
     appendLog('ERROR', error.stack || error.message || String(error));

@@ -104,10 +104,22 @@ ELECTRON_DEV_SERVER_URL=http://127.0.0.1:5173 npm run dev
 Get-Content "$env:APPDATA\CyclopsCmd\logs\main.log" -Tail 300
 ```
 
+如果这个路径不存在，说明你使用的可能是较早的构建包，它的 Electron 用户数据目录可能仍使用内部包名 `cyclops-cmd-electron`。请再尝试：
+
+```powershell
+Get-Content "$env:APPDATA\cyclops-cmd-electron\logs\main.log" -Tail 300
+```
+
 也可以直接打开这个目录复制日志文件：
 
 ```powershell
 explorer "$env:APPDATA\CyclopsCmd\logs"
+```
+
+旧构建包对应的目录是：
+
+```powershell
+explorer "$env:APPDATA\cyclops-cmd-electron\logs"
 ```
 
 ### 需要重点保留的字段
