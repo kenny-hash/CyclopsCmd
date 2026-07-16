@@ -25,6 +25,11 @@ Useful checks on the jump server:
 ```bash
 # Confirm the target is reachable from the jump server.
 nc -vz <target_ip> <target_port>
+timeout 5 bash -c '</dev/tcp/<target_ip>/<target_port>' && echo ok || echo failed
+
+# Confirm the target SSH daemon is reachable and can complete a direct login
+# from the jump server network namespace.
+ssh -vvv -p <target_port> <target_user>@<target_ip>
 
 # Debian/Ubuntu sshd logs.
 sudo journalctl -u ssh -u sshd --since "30 minutes ago"
@@ -38,6 +43,16 @@ sudo tail -n 200 /var/log/secure
 sudo sshd -T | egrep 'allowtcpforwarding|permitopen|disableforwarding|maxsessions'
 sudo sshd -T -C user=<jump_user>,host=<client_host>,addr=<client_ip> | egrep 'allowtcpforwarding|permitopen|disableforwarding|maxsessions'
 ```
+
+If the effective config shows `allowtcpforwarding yes`, `disableforwarding no`, and `permitopen any`, then the SSH forwarding policy is probably not the blocking point. In that case, focus on jump-to-target reachability and target-side controls: wrong target IP from the jump server's network, target sshd down, target firewall/security group, route/ACL issues, or a middlebox resetting/refusing the TCP connection.
+
+When the problem is intermittent or unclear, capture traffic on the jump server while reproducing:
+
+```bash
+sudo tcpdump -nn -i any host <target_ip> and port <target_port>
+```
+
+The expected successful pattern is a TCP SYN from the jump server to the target followed by SYN/ACK. SYN retries, RST, or no packets point to network/firewall/routing rather than CyclopsCmd's SSH client logic.
 
 Also confirm that the sshd service was reloaded after changing config:
 
