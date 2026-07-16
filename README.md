@@ -232,8 +232,8 @@ env:
 ### 工作流触发方式
 
 - `pull_request`：运行测试并验证 Electron App 能否成功构建，产物只保留为 Actions artifact。
-- `push` 到 `main`：运行测试和构建，产物可在对应 Actions run 的 **Artifacts** 区域下载，便于本地临时测试。
-- 推送 `v*` 标签（例如 `v0.1.0`）：运行测试和构建，并把安装包上传到 GitHub Release 页面。
+- `push` 到 `main`：运行测试和构建，产物可在对应 Actions run 的 **Artifacts** 区域下载；构建成功后还会创建/更新 `main-latest` 预发布 Release，并上传安装包，便于从主干分支直接下载最新版本。
+- 推送 `v*` 标签（例如 `v0.1.0`）：运行测试和构建，并把安装包上传到对应的正式 GitHub Release 页面。
 - `workflow_dispatch`：支持在 GitHub Actions 页面手动触发一次完整测试和构建。
 
 ### 本地与 CI 使用的测试命令
@@ -256,7 +256,9 @@ npm run build
 
 ### 在 GitHub Release 页面提供可下载 App
 
-GitHub 当前功能可以完成这个需求：当你推送形如 `v0.1.0` 的 Git tag 后，`electron-release.yml` 会在 GitHub Release 中创建/更新对应 Release，并上传各平台构建产物。示例：
+GitHub 当前功能可以完成这个需求：当代码合并并推送到 `main` 后，`electron-release.yml` 会在构建成功后创建/更新名为 `main-latest` 的预发布 Release，并上传各平台构建产物。
+
+如果需要发布正式版本，推送形如 `v0.1.0` 的 Git tag 后，工作流会在 GitHub Release 中创建/更新对应正式 Release，并上传各平台构建产物。示例：
 
 ```bash
 git tag v0.1.0
