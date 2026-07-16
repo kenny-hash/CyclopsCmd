@@ -6,6 +6,7 @@ import datetime
 import time
 import traceback
 import hashlib
+import sys
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -86,24 +87,17 @@ class JsonFormatter(logging.Formatter):
                 "traceback": traceback.format_exception(exc_type, exc_value, exc_traceback)
             }
         
-        return json.dumps(log_data)
+        return json.dumps(log_data, ensure_ascii=False, default=str)
 
 # 配置日志
 level = logging.DEBUG if os.getenv("DEBUG_MODE", "False").lower() in ("true", "1", "t") else logging.INFO
 logger = logging.getLogger(__name__)
 logger.setLevel(level)
-
-# 如果需要结构化JSON日志，取消下面注释
-"""
-# 移除所有现有处理器
-for handler in logger.handlers[:]:
-    logger.removeHandler(handler)
-
-# 添加控制台处理器
-handler = logging.StreamHandler()
-handler.setFormatter(JsonFormatter())
-logger.addHandler(handler)
-"""
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    logger.addHandler(handler)
+logger.propagate = False
 
 # 创建FastAPI应用
 app = FastAPI()
@@ -149,6 +143,7 @@ ERROR_MESSAGES = {
     "SSH_CONNECTION_REFUSED": "SSH 连接被拒绝，请检查端口是否开放或服务是否运行。",
     "SSH_CONNECTION_FAILED": "SSH 连接失败，请检查服务器配置。",
     "SSH_CHANNEL_ERROR": "SSH 通道打开失败，请检查服务器会话限制或网络状态。",
+    "SSH_TUNNEL_OPEN_FAILED": "跳板机已登录成功，但无法打开到目标服务器的隧道。请检查跳板机到目标地址/端口的网络连通性、堡垒机 TCP 转发策略（AllowTcpForwarding/PermitOpen）或访问控制规则。",
     "COMMAND_TIMEOUT": "命令执行超时，请检查命令是否长时间阻塞。",
     "COMMAND_EXECUTION_FAILED": "命令执行失败，请检查命令内容或服务器状态。",
     "INTERNAL_ERROR": "服务内部错误，请稍后重试。",
@@ -713,13 +708,14 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
             except Exception as e:
                 last_error = e
                 retry_count += 1
+                diagnostics = describe_ssh_exception(e)
                 
                 if use_jump_server:
-                    logger.warning(f"Jump server connection attempt {retry_count} failed: {e}", 
-                                 extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
+                    logger.warning(f"Jump server connection attempt {retry_count} failed: {e}",
+                                 extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip, "diagnostics": diagnostics})
                 else:
                     logger.warning(f"SSH connection attempt {retry_count} failed: {e}", 
-                                 extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
+                                 extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip, "diagnostics": diagnostics})
                 
                 if retry_count < max_retries:
                     # 指数退避重试
@@ -730,22 +726,24 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
                     if use_jump_server:
                         error_msg = f"Jump server connection failed after {max_retries} attempts: {last_error}"
                     
-                    logger.error(error_msg, extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip})
+                    logger.error(error_msg, extra={"request_id": request_id, "row_id": row.rowId, "ip": row.ip, "diagnostics": diagnostics})
                     ssh_error = classify_ssh_error(last_error)
                     if use_jump_server:
                         ssh_error["message"] = f"跳板机连接失败：{ssh_error['message']}"
+                        if isinstance(last_error, asyncssh.misc.ChannelOpenError):
+                            ssh_error = error_payload("SSH_TUNNEL_OPEN_FAILED")
 
                     await ws.send_json(websocket_error(
                         row.rowId,
                         ssh_error["code"],
                         ssh_error["message"],
-                        details={"attempts": max_retries},
+                        details={"attempts": max_retries, "diagnostics": diagnostics},
                     ))
-                    return  # 结束函数执行
+                    return False  # 结束函数执行
         
         if conn is None:
             # 如果依然没有连接，返回
-            return
+            return False
             
         # 为每个命令设置信号量，防止单个服务器执行过多命令
         cmd_semaphore = asyncio.Semaphore(5)  # 最多同时执行5个命令，降低了并发度
@@ -969,6 +967,7 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
         # 保存剩余结果
         if results_batch:
             await save_results_batch(results_batch)
+        return True
             
     except Exception as exc:
         logger.error(f"Error in SSH session: {exc}", 
@@ -981,6 +980,7 @@ async def exec_row(row: Row, ws: WebSocket, request_id: str):
             session_error["code"],
             session_error["message"],
         ))
+        return False
 
 from sqlalchemy import text
 from sqlalchemy import inspect
@@ -1094,14 +1094,18 @@ async def websocket_endpoint(ws: WebSocket, room: str):
         # 使用信号量限制并发
         async def exec_row_with_limit(row):
             async with semaphore:
-                await exec_row(row, ws, request_id)
+                return await exec_row(row, ws, request_id)
         
         # 并发执行所有行的命令
-        await asyncio.gather(*(exec_row_with_limit(row) for row in rows))
+        row_results = await asyncio.gather(*(exec_row_with_limit(row) for row in rows))
+        has_errors = not all(row_results)
         
         # 发送完成消息，通知前端所有命令已执行完毕
-        await ws.send_json({"status": "completed"})
-        logger.info(f"All commands completed", extra={"request_id": request_id, "room": room})
+        await ws.send_json({"status": "completed", "hasErrors": has_errors})
+        if has_errors:
+            logger.warning(f"All commands completed with errors", extra={"request_id": request_id, "room": room})
+        else:
+            logger.info(f"All commands completed", extra={"request_id": request_id, "room": room})
         
     except Exception as e:
         logger.error(f"Error in WebSocket processing", 

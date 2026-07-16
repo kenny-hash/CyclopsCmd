@@ -645,7 +645,11 @@ export default function App() {
 
           // 处理完成状态消息
           if (message.status === "completed") {
-            console.log("All commands completed successfully");
+            if (message.hasErrors) {
+              console.warn("All commands completed with errors");
+            } else {
+              console.log("All commands completed successfully");
+            }
             setIsRunning(false);
             setConnectionStatus(null);
             return;

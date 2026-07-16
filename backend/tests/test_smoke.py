@@ -214,3 +214,13 @@ def test_describe_ssh_exception_includes_safe_channel_details(client):
     assert diagnostics["exception_type"] == "ChannelOpenError"
     assert diagnostics["code"] == 1
     assert diagnostics["reason"] == "administratively prohibited"
+
+
+def test_jump_tunnel_error_message_is_actionable(client):
+    import app as app_module
+
+    message = app_module.ERROR_MESSAGES["SSH_TUNNEL_OPEN_FAILED"]
+
+    assert "跳板机已登录成功" in message
+    assert "AllowTcpForwarding" in message
+    assert "PermitOpen" in message
