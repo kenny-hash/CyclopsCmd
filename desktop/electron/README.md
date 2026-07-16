@@ -80,6 +80,50 @@ ELECTRON_DEV_SERVER_URL=http://127.0.0.1:5173 npm run dev
 
 常见原因是前端产物使用了 `/assets/...` 这类绝对路径；在 `file://` 场景下它会指向磁盘根目录，导致 JS/CSS 没加载，最终显示空白窗口。
 
+## Windows 已安装应用导出跳板机诊断日志
+
+如果 Windows 打包应用里出现 `SSH_CHANNEL_ERROR`，请优先导出 Electron 主进程日志。这个日志会合并记录：
+
+- Electron 主进程启动、窗口加载、渲染进程异常。
+- 前端控制台输出。
+- 后端 sidecar 的 `stdout` / `stderr`，包括跳板机连接失败时的 `request_id`、`row_id`、脱敏后的 `jump_key` / `connection_key`，以及 `diagnostics.code`、`diagnostics.reason` 等安全诊断字段。
+
+### 方法一：从界面导出（推荐）
+
+1. 打开 Windows 版 CyclopsCmd。
+2. 点击页面右上角的下拉菜单。
+3. 点击 **Export Debug Logs**。
+4. 在弹出的保存窗口中选择保存位置。
+5. 把导出的 `.log` 文件发给维护者即可。
+
+### 方法二：直接读取本机日志文件
+
+如果界面打不开，或导出按钮不可用，可以在 PowerShell 里执行：
+
+```powershell
+Get-Content "$env:APPDATA\CyclopsCmd\logs\main.log" -Tail 300
+```
+
+也可以直接打开这个目录复制日志文件：
+
+```powershell
+explorer "$env:APPDATA\CyclopsCmd\logs"
+```
+
+### 需要重点保留的字段
+
+定位跳板机问题时，请尽量保留同一个 `request_id` 附近的日志，尤其是下面字段：
+
+- `request_id`
+- `row_id`
+- `diagnostics.exception_type`
+- `diagnostics.code`
+- `diagnostics.reason`
+- `jump_key`
+- `connection_key`
+
+`jump_key` 和 `connection_key` 在后端已经做了脱敏处理，不包含明文密码或凭据指纹，可以直接随日志发送。
+
 ## 构建可分发 App
 
 ```bash

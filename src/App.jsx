@@ -453,7 +453,7 @@ export default function App() {
     setShowDropdown(false);
 
     if (!canExportDesktopLogs) {
-      alert('Debug log export is only available in the CyclopsCmd desktop client.');
+      alert('调试日志导出只在 CyclopsCmd 桌面客户端中可用。');
       return;
     }
 
@@ -462,10 +462,10 @@ export default function App() {
       if (result?.canceled) {
         return;
       }
-      alert(`Debug logs exported successfully: ${result.filePath}`);
+      alert(`调试日志已导出：${result.filePath}\n请把这个 .log 文件发给维护者定位问题。`);
     } catch (error) {
       console.error('Error exporting debug logs:', error);
-      alert(`Error exporting debug logs: ${error.message}`);
+      alert(`导出调试日志失败：${error.message}`);
     }
   };
 
@@ -1430,7 +1430,7 @@ export default function App() {
                   <line x1="16" y1="17" x2="8" y2="17"></line>
                   <polyline points="10 9 9 9 8 9"></polyline>
                 </svg>
-                Export Debug Logs
+                Export Debug Logs（导出调试日志）
               </a>
             </div>
           )}
