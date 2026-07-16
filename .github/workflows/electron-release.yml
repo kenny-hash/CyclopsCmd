@@ -115,8 +115,13 @@ jobs:
           retention-days: 14
 
       - name: Upload files to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.files }}
           generate_release_notes: true
+          tag_name: ${{ github.ref == 'refs/heads/main' && 'main-latest' || github.ref_name }}
+          name: ${{ github.ref == 'refs/heads/main' && 'Latest main build' || github.ref_name }}
+          body: ${{ github.ref == 'refs/heads/main' && format('Automated release for main branch build {0}.', github.sha) || '' }}
+          prerelease: ${{ github.ref == 'refs/heads/main' }}
+          make_latest: ${{ github.ref == 'refs/heads/main' && 'false' || 'legacy' }}
